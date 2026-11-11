@@ -36,7 +36,10 @@ enum InputButtons : uint8_t {
   kButtonJump = 1 << 0,
   kButtonSprint = 1 << 1,
   kButtonPrimary = 1 << 2,  // attack / gather / eat / shoot
+  kButtonReload = 1 << 3,
+  kButtonAim = 1 << 4,      // aim down sights: slower, steadier
 };
+constexpr float kAimSpeedFactor = 0.55f;
 
 struct PlayerInput {
   uint32_t seq = 0;    // increases by one per input; used for reconciliation

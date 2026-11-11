@@ -47,8 +47,12 @@ class Renderer {
   void drawObjects(const World& world);
   void drawGhost(const WorldObject& o, bool valid);  // building preview
   void drawPlayer(const Vec3& feet, float yaw, float pitch, const PlayerLook& look);
-  // First-person arms and held item. swing is 0..1 through an attack.
-  void drawViewModel(Item held, float swing, bool muzzleFlash, float bobPhase, float bobAmount);
+  // First-person arms and held item. swing is 0..1 through an attack (or recoil for guns);
+  // aim is 0 (hip) .. 1 (looking down the sights); hideGun while looking through a scope.
+  void drawViewModel(const ItemStack& held, float swing, bool muzzleFlash, float bobPhase, float bobAmount, float aim,
+                     bool hideGun);
+  // Fireball and smoke; age in seconds since the blast.
+  void drawExplosion(const Vec3& pos, float age);
   void endFrame();
 
   // World position -> normalized screen position (0..1, y down). False if behind the camera.
@@ -77,6 +81,7 @@ class Renderer {
   void setCommonUniforms(GLuint program, int mode, const Mat4& viewProj, const Vec3& camPos);
   void drawCmd(const DrawCmd& c);
   void box(std::vector<DrawCmd>& list, const Mat4& m, const Vec3& color, float alpha = 1.0f, bool shadow = true);
+  void gunWithMods(std::vector<DrawCmd>& list, const Mat4& m, const ItemStack& gun, bool shadow);
 
   GLuint program_ = 0, shadowProgram_ = 0, skyProgram_ = 0;
   GLint uModel_ = -1, uTint_ = -1, uAlpha_ = -1;

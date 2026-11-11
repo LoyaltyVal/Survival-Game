@@ -15,7 +15,7 @@ PlayerInput sanitizeInput(const PlayerInput& in) {
   if (len > 1.0f) { out.moveX /= len; out.moveZ /= len; }  // no diagonal speed boost
   out.yaw = std::fmod(finiteOr(in.yaw, 0), 2.0f * kPi);
   out.pitch = clampf(finiteOr(in.pitch, 0), -kMaxPitch, kMaxPitch);
-  out.buttons = in.buttons & (kButtonJump | kButtonSprint | kButtonPrimary);
+  out.buttons = in.buttons & (kButtonJump | kButtonSprint | kButtonPrimary | kButtonReload | kButtonAim);
   out.slot = in.slot < 6 ? in.slot : 0;
   return out;
 }
@@ -36,8 +36,10 @@ void applyInput(PlayerState& s, const PlayerInput& rawIn, const Terrain& terrain
   Vec3 forward{-std::sin(s.yaw), 0, -std::cos(s.yaw)};
   Vec3 right{std::cos(s.yaw), 0, -std::sin(s.yaw)};
   bool wantSprint = (in.buttons & kButtonSprint) && in.moveZ > 0;
-  bool sprinting = wantSprint && !s.exhausted && s.stamina > 0;
+  const bool aiming = (in.buttons & kButtonAim) != 0;
+  bool sprinting = wantSprint && !aiming && !s.exhausted && s.stamina > 0;
   float speed = sprinting ? kSprintSpeed : kWalkSpeed;
+  if (aiming) speed *= kAimSpeedFactor;
   Vec3 wish = (forward * in.moveZ + right * in.moveX) * speed;
 
   // Accelerate toward the wished velocity (less control while airborne).

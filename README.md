@@ -37,6 +37,20 @@ Custom C++ engine for an open-world survival game (gather, craft, build, PvE + P
   ground textured per pixel (grass, dirt, sand, wet sand, layered rock, snow) with surface relief, curved
   wind-blown grass, shore foam and depth-coloured water, rounded characters.
 
+- **Guns**: Bow, Revolver, Pistol, SMG (auto), Pump Shotgun (8 pellets), Assault Rifle (auto), Hunting Rifle, Bolt
+  Sniper. Magazines and reloading (**R**), aim down sights (**right mouse**), spread that grows when moving or
+  jumping, damage falloff, headshots x2. Every gun has a fixed **recoil pattern** you learn to pull against.
+- **Attachments** (click a gun in your inventory, drag them on): Holo Sight, 4x and 8x Scopes (real scope view),
+  Silencer (quiet, no flash), Muzzle Brake, Vertical Grip, Laser Sight. Each gun only accepts what fits it.
+- **Raiding and bases**: Storage Box, Large Box, Small Stash; Wooden / Sheet Metal / Armored doors; **Code Locks**
+  (4-digit codes; unlocked doors open for anyone); **Land Claim Post** (building rights within 25 m);
+  **Pipe Bomb** and **Explosive Charge** (stick on walls/doors, timed fuse, area damage).
+- **Resources**: coal rocks, rare high-quality metal up in the mountains, scrap piles on the coast; crafted
+  charcoal, HQ metal, rope, gun parts, explosives, shotgun shells, arrows.
+- **Sound**: 3D positional audio (miniaudio): every gun has its own synthesized report with echoes, silenced
+  shots, bow, reloads, dry fire, hit markers, chopping/mining, footsteps, doors, building, explosions, keypad beeps.
+  The sounds are written to `sounds/*.wav` on first run; replace any file with your own recording to change it.
+
 ## Playing with friends
 
 - **Same Wi-Fi / home network**: they open the game, type your home address shown under "Invite friends" in the
@@ -94,7 +108,7 @@ server to their `servers.txt` as `My Server | <your ip> | 27015 | 1337`.
 
 WASD move · Shift sprint · Space jump · mouse look · Left click hit / gather / shoot / eat / build ·
 1-6 or wheel hotbar · Tab inventory & crafting · E open doors and boxes, pick plants ·
-R change building piece · Enter chat · V camera · Esc menu.
+R reload / change building piece · Right mouse aim · Enter chat · V camera · Esc menu.
 
 **First 10 minutes**: hit trees with your rock → craft a Building Plan (20 wood) → place a foundation,
 walls and a doorway → craft a Wooden Door and a Sleeping Bag (hemp → cloth) → craft a Hammer and upgrade
@@ -116,7 +130,7 @@ shared/      used by client AND server, so they can never disagree
 server/      authoritative server: all game rules, saving
 client/      main.cpp (loop, input), ui.cpp (menus, HUD, inventory), renderer.* (shadows, sky, water),
              meshes.* (procedural models), gl.*
-tests/       tests.cpp (173 checks), bot.cpp
+tests/       tests.cpp (259 checks), bot.cpp
 ```
 
 ## Verified

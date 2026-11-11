@@ -81,7 +81,20 @@ if(SG_BUILD_CLIENT)
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
     GIT_TAG v1.91.5
     GIT_SHALLOW TRUE)
-  FetchContent_MakeAvailable(glfw imgui)
+  # miniaudio: single-header audio library (sound effects, 3D positioning). SOURCE_SUBDIR points at
+  # nothing so only the header is fetched, not miniaudio's own examples and tests.
+  FetchContent_Declare(miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG 0.11.21
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR do-not-build)
+  FetchContent_MakeAvailable(glfw imgui miniaudio)
+
+  add_library(miniaudio_impl STATIC client/miniaudio_impl.c)
+  target_include_directories(miniaudio_impl PUBLIC ${miniaudio_SOURCE_DIR})
+  if(UNIX AND NOT APPLE)
+    target_link_libraries(miniaudio_impl PUBLIC ${CMAKE_DL_LIBS} m)
+  endif()
 
   add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -101,8 +114,10 @@ if(SG_BUILD_CLIENT)
     client/renderer.cpp
     client/meshes.cpp
     client/ui.cpp
+    client/sfx.cpp
+    client/audio.cpp
   )
-  target_link_libraries(sg_client PRIVATE sg_server_lib glfw imgui)
+  target_link_libraries(sg_client PRIVATE sg_server_lib glfw imgui miniaudio_impl)
   target_compile_definitions(sg_client PRIVATE GLFW_INCLUDE_NONE)
   target_include_directories(sg_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/client)
   sg_warnings(sg_client)

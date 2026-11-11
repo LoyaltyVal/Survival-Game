@@ -101,6 +101,26 @@ class Server {
     uint8_t kick = 0;       // RejectReason to send; removed at the end of the tick
     uint32_t replyTo = 0;   // last player who /msg'd us, for /r
     bool god = false;       // /god: takes no damage, never starves
+    bool primaryHeld = false;  // for semi-auto guns: one shot per click
+    bool aiming = false;
+    bool reloading = false;
+    double reloadUntil = 0;    // input clock
+    double lastCodeTry = -1e9;
+  };
+  struct Lock {               // code lock on a door, box or claim post
+    std::string code;         // 4 digits; empty until the owner sets it
+    std::unordered_set<uint32_t> authorized;  // player ids that know the code
+  };
+  struct Fuse {               // a planted explosive
+    double explodeAt;
+    Item item;
+    uint32_t owner;
+    double nextBeep;
+  };
+  struct ShotHit {
+    float dist = 0;
+    uint32_t playerId = 0, objectId = 0;
+    bool head = false;
   };
   struct PlayerRecord {  // a player's saved state while offline
     uint32_t id = 0;
@@ -154,9 +174,22 @@ class Server {
   // gameplay
   void simulate(double dt);
   void processInput(Client& c, const PlayerInput& in);
-  void primaryAction(Client& c, const PlayerInput& in);
+  void primaryAction(Client& c, const PlayerInput& in, bool pressed);
   void meleeHit(Client& c, const PlayerInput& in, Item item);
-  void shoot(Client& c, const PlayerInput& in, Item item);
+  void shoot(Client& c, const PlayerInput& in, ItemStack& gun);
+  ShotHit traceShot(const Client& c, const Vec3& eye, const Vec3& dir, float range, double rewindTo);
+  void startReload(Client& c);
+  void finishReload(Client& c);
+  void soundAt(const Vec3& pos, Sound s, float radius, uint32_t exceptPlayer);
+  bool canAccess(const Client& c, const WorldObject& o) const;
+  bool buildBlocked(const Client& c, const Vec3& pos) const;
+  void promptCode(Client& c, uint32_t objectId, uint8_t mode);
+  void handleCode(Client& c, uint32_t objectId, const std::string& code);
+  void doUseOn(Client& c, uint32_t objectId);
+  void doAttach(Client& c, uint32_t container, int gunSlot, int modSlot);
+  void doDetach(Client& c, uint32_t container, int gunSlot, int modSlot);
+  void updateCharges();
+  void explode(uint32_t chargeId);
   void damagePlayer(Client& victim, float amount, Client* attacker, const char* weapon, bool headshot);
   void killPlayer(Client& victim, const std::string& cause, const std::string& feed);
   void respawnPlayer(Client& c, bool atBag);
@@ -170,7 +203,7 @@ class Server {
   bool nearWorkbench(const Client& c) const;
   Vec3 positionAt(const Client& c, double time) const;
   void doCraft(Client& c, int recipe, int times);
-  void doPlace(Client& c, ObjType type, const Vec3& pos, uint8_t rot);
+  void doPlace(Client& c, ObjType type, const Vec3& pos, uint8_t rot, Item item);
   void doInteract(Client& c, uint8_t kind, uint32_t id);
   void storeRecord(const Client& c);
   Client* findClient(uint32_t id);
@@ -186,6 +219,9 @@ class Server {
   std::unordered_map<uint32_t, double> bagExpiry_;      // loot bag id -> despawn time
   std::unordered_map<uint32_t, NodeRuntime> nodes_;     // only nodes that have been hit
   mutable std::mutex ownerMu_;
+  std::unordered_map<uint32_t, Lock> locks_;                          // by object id
+  std::unordered_map<uint32_t, std::unordered_set<uint32_t>> claims_;  // claim post -> authorized players
+  std::unordered_map<uint32_t, Fuse> fuses_;                          // planted explosives
   std::unordered_map<std::string, Rank> ranks_;  // by name; missing = Player
   std::unordered_set<std::string> bans_;
   std::unordered_set<std::string> mutes_;

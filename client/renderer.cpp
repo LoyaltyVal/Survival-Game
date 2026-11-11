@@ -851,19 +851,34 @@ void Renderer::drawPlayer(const Vec3& feet, float yaw, float pitch, const Player
   if (holding) {
     M item = rs * M::translate({0, -0.6f, 0}) * M::rotateX(-kHalfPi);
     opaque_.push_back({&items_[static_cast<size_t>(look.held)], item, {1, 1, 1}, 1.0f, true});
-    if (gun && look.attacking) {
-      float z = look.held == Item::Rifle ? -0.86f : -0.2f;
-      opaque_.push_back({&blob_, item * M::translate({0, 0.03f, z}) * M::scale({0.1f, 0.1f, 0.14f}), kFlash, 1.0f, false});
+    if (gun && look.attacking && look.held != Item::Bow) {
+      Vec3 m = gunMounts(look.held).muzzle;
+      opaque_.push_back({&blob_, item * M::translate(m) * M::scale({0.1f, 0.1f, 0.14f}), kFlash, 1.0f, false});
     }
   }
 }
 
-void Renderer::drawViewModel(Item held, float swing, bool muzzleFlash, float bobPhase, float bobAmount) {
+void Renderer::gunWithMods(std::vector<DrawCmd>& list, const Mat4& m, const ItemStack& gun, bool shadow) {
+  list.push_back({&items_[static_cast<size_t>(gun.item)], m, {1, 1, 1}, 1.0f, shadow});
+  if (itemDef(gun.item).kind != ItemKind::Gun) return;
+  const GunMounts mt = gunMounts(gun.item);
+  const Vec3 at[3] = {mt.sight, mt.muzzle, mt.grip};
+  for (int slot = 0; slot < 3; ++slot) {
+    Item mod = modAt(gun, static_cast<ModSlot>(slot));
+    if (mod != Item::None) list.push_back({&items_[static_cast<size_t>(mod)], m * Mat4::translate(at[slot]), {1, 1, 1}, 1.0f, shadow});
+  }
+}
+
+void Renderer::drawViewModel(const ItemStack& heldStack, float swing, bool muzzleFlash, float bobPhase, float bobAmount,
+                             float aim, bool hideGun) {
   using M = Mat4;
+  const Item held = heldStack.empty() ? Item::None : heldStack.item;
   const M cam = M::translate(cam_.eye) * M::rotateY(cam_.yaw) * M::rotateX(cam_.pitch);
-  const ItemKind kind = itemDef(held).kind;
+  const ItemDef& def = itemDef(held);
+  const ItemKind kind = def.kind;
   const float s = std::sin(clampf(swing, 0.0f, 1.0f) * kPi);
-  const Vec3 bob{std::sin(bobPhase) * 0.012f * bobAmount, -std::fabs(std::cos(bobPhase)) * 0.014f * bobAmount, 0};
+  const Vec3 bob = Vec3{std::sin(bobPhase) * 0.012f * bobAmount, -std::fabs(std::cos(bobPhase)) * 0.014f * bobAmount, 0} *
+                   (1.0f - 0.85f * aim);
   auto part = [&](const M& m, const Vec3& size, const Vec3& color) {
     viewModel_.push_back({&sphere_, m * M::scale(size * 0.5f), color, 1.0f, false});
   };
@@ -871,20 +886,28 @@ void Renderer::drawViewModel(Item held, float swing, bool muzzleFlash, float bob
   if (held == Item::None) {  // bare fists, punching
     hand = cam * M::translate(Vec3{0.24f, -0.26f, -0.4f - 0.18f * s} + bob) * M::rotateX(0.2f);
   } else if (kind == ItemKind::Gun) {
-    hand = cam * M::translate(Vec3{0.15f, -0.15f, -0.32f + 0.04f * s} + bob) * M::rotateX(0.16f * s) * M::rotateY(0.03f);
+    // Hip position blends into aiming down the sights: the sight line moves to the screen centre.
+    const GunMounts mt = gunMounts(held);
+    Item sight = modAt(heldStack, ModSlot::Sight);
+    float eyeY = sight != Item::None ? mt.sight.y + sightEyeHeight(sight) : def.sightHeight;
+    Vec3 hip{0.15f, -0.15f, -0.32f}, ads{0.0f, -eyeY, held == Item::Bow ? -0.42f : -0.26f};
+    Vec3 pos = lerp(hip, ads, aim) + bob + Vec3{0, 0, 0.045f * s * (1.0f - 0.4f * aim)};
+    hand = cam * M::translate(pos) * M::rotateX(0.16f * s * (1.0f - 0.6f * aim)) * M::rotateY(0.03f * (1.0f - aim));
   } else if (kind == ItemKind::Food || kind == ItemKind::Medical) {
     hand = cam * M::translate(Vec3{0.24f - 0.12f * s, -0.27f + 0.12f * s, -0.42f} + bob) * M::rotateX(0.4f * s);
   } else {
     hand = cam * M::translate(Vec3{0.27f, -0.28f, -0.42f - 0.08f * s} + bob) * M::rotateY(-0.25f) * M::rotateX(-1.2f * s) *
            M::rotateZ(0.08f);
   }
-  if (held != Item::None) viewModel_.push_back({&items_[static_cast<size_t>(held)], hand, {1, 1, 1}, 1.0f, false});
+  if (hideGun) return;  // looking through a scope: the overlay covers the screen
+  if (held != Item::None) gunWithMods(viewModel_, hand, heldStack, false);
   // Right hand (palm + knuckles) and forearm in a sleeve.
   part(hand * M::translate({0, -0.02f, 0.02f}), {0.08f, 0.1f, 0.11f}, kSkin);
   part(hand * M::translate({-0.01f, 0.01f, -0.025f}), {0.075f, 0.05f, 0.05f}, kSkin * 0.95f);
   part(hand * M::translate({0.01f, -0.07f, 0.26f}) * M::rotateX(0.3f), {0.095f, 0.095f, 0.46f}, kSleeve);
-  if (kind == ItemKind::Gun) {  // left hand supports the gun
-    float z = held == Item::Rifle ? -0.33f : -0.02f;
+  if (kind == ItemKind::Gun) {  // left hand supports the gun under the barrel
+    const GunMounts mt = gunMounts(held);
+    float z = (held == Item::Pistol || held == Item::Revolver) ? -0.02f : held == Item::Bow ? 0.0f : mt.grip.z + 0.06f;
     M lhand = hand * M::translate(Vec3{-0.03f, -0.06f, z});
     part(lhand, {0.085f, 0.085f, 0.11f}, kSkin);
     Vec3 a = {lhand.at(0, 3), lhand.at(1, 3), lhand.at(2, 3)};
@@ -892,10 +915,28 @@ void Renderer::drawViewModel(Item held, float swing, bool muzzleFlash, float bob
     Vec3 b = {elbow.at(0, 3), elbow.at(1, 3), elbow.at(2, 3)};
     // Forearm: a unit sphere stretched along a->b (beam maps -0.5..0.5, the sphere spans -1..1).
     viewModel_.push_back({&sphere_, M::beam(a, b, 0.095f, 0.095f) * M::scale({0.5f, 0.5f, 0.5f}), kSleeve, 1.0f, false});
-    if (muzzleFlash) {
-      float mz = held == Item::Rifle ? -0.88f : -0.2f;
-      viewModel_.push_back({&blob_, hand * M::translate({0, 0.03f, mz}) * M::scale({0.06f, 0.06f, 0.09f}), kFlash, 1.0f, false});
+    if (muzzleFlash && held != Item::Bow) {
+      Vec3 m = mt.muzzle + Vec3{0, 0, -0.03f};
+      viewModel_.push_back({&blob_, hand * M::translate(m) * M::scale({0.06f, 0.06f, 0.09f}), kFlash, 1.0f, false});
     }
+  }
+}
+
+void Renderer::drawExplosion(const Vec3& pos, float age) {
+  using M = Mat4;
+  if (age < 0.45f) {  // fireball
+    float r = 0.6f + 3.2f * clampf(age / 0.12f, 0.0f, 1.0f);
+    float a = 1.0f - age / 0.45f;
+    transparent_.push_back({&blob_, M::translate(pos) * M::scale({r, r * 0.85f, r}), Vec3{9.0f, 4.5f, 1.2f} * a, a, false});
+  }
+  for (int k = 0; k < 6; ++k) {  // smoke puffs drifting up
+    float t = age - 0.05f * k;
+    if (t <= 0 || t > 4.0f) continue;
+    float ang = k * 1.05f;
+    Vec3 p = pos + Vec3{std::cos(ang) * (0.6f + t * 0.4f), 0.6f + t * (1.2f + 0.2f * k), std::sin(ang) * (0.6f + t * 0.4f)};
+    float r = 1.0f + t * 0.9f;
+    float a = 0.55f * (1.0f - t / 4.0f);
+    transparent_.push_back({&sphere_, M::translate(p) * M::scale({r, r, r}), Vec3{0.08f, 0.075f, 0.07f}, a, false});
   }
 }
 

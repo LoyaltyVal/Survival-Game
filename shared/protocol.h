@@ -20,7 +20,7 @@
 namespace sg {
 
 constexpr uint32_t kProtocolMagic = 0x31304753;  // "SG01"
-constexpr uint16_t kProtocolVersion = 3;
+constexpr uint16_t kProtocolVersion = 4;
 constexpr uint16_t kDefaultPort = 27015;
 constexpr size_t kMaxPacketSize = 1200;  // stays under typical MTU
 constexpr int kMaxInputsPerPacket = 4;   // redundancy against packet loss
@@ -157,6 +157,8 @@ enum class Msg : uint8_t {
   Gathered,           // u16 item, u16 count
   Died,               // str cause
   PlayerLeft,         // u32 id
+  SoundAt,            // u8 Sound, vec3 position, u32 source player (0 = world)
+  CodePrompt,         // u32 object id, u8 mode (0 = choose a new code, 1 = enter the code)
   // client -> server
   MoveItem = 64,      // u32 fromContainer, u8 fromSlot, u32 toContainer, u8 toSlot, u16 count (0 = all)
   Craft,              // u16 recipe, u8 times
@@ -167,6 +169,10 @@ enum class Msg : uint8_t {
   Respawn,            // u8 atSleepingBag
   Chat,               // str
   Drop,               // u32 container, u8 slot
+  Attach,             // u32 container, u8 gun slot, u8 attachment slot (in the same container)
+  Detach,             // u32 container, u8 gun slot, u8 ModSlot
+  UseOn,              // u32 object id: use the held item on it (code lock)
+  Code,               // u32 object id, str 4 digits (set a new code or try one)
 };
 
 enum class TextKind : uint8_t { Info = 0, Chat = 1, Kill = 2, Warning = 3, Whisper = 4, Announce = 5 };

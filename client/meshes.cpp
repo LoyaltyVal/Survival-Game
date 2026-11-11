@@ -293,11 +293,8 @@ void buildItemModel(Item item, MeshBuilder& mb) {
       mb.box(M::translate({0, 0.02f, -0.08f}) * M::scale({0.046f, 0.055f, 0.24f}), kGunMetal, kMatMetal);
       mb.box(M::translate({0, 0.0f, -0.36f}) * M::scale({0.042f, 0.045f, 0.32f}), kRifleWood, kMatWood);
       mb.cylinder(M::translate({0, 0.03f, -0.2f}) * M::rotateX(-kHalfPi) * M::scale({0.011f, 0.62f, 0.011f}), 12, 1, 0.85f, kGunMetal, kMatMetal);
-      mb.cylinder(M::translate({0, 0.095f, 0.02f}) * M::rotateX(-kHalfPi) * M::scale({0.017f, 0.26f, 0.017f}), 14, 1, 1, kGunMetal, kMatMetal);
-      mb.cylinder(M::translate({0, 0.095f, 0.04f}) * M::rotateX(-kHalfPi) * M::scale({0.022f, 0.05f, 0.022f}), 14, 1, 1, kGunMetal, kMatMetal);
-      mb.cylinder(M::translate({0, 0.095f, -0.19f}) * M::rotateX(-kHalfPi) * M::scale({0.024f, 0.06f, 0.024f}), 14, 1, 1, kGunMetal, kMatMetal);
-      mb.box(M::translate({0, 0.065f, -0.03f}) * M::scale({0.02f, 0.025f, 0.015f}), kSteel, kMatMetal);  // mounts
-      mb.box(M::translate({0, 0.065f, -0.13f}) * M::scale({0.02f, 0.025f, 0.015f}), kSteel, kMatMetal);
+      mb.box(M::translate({0, 0.05f, -0.78f}) * M::scale({0.006f, 0.022f, 0.008f}), kSteel, kMatMetal);  // front post
+      mb.box(M::translate({0, 0.052f, -0.02f}) * M::scale({0.026f, 0.01f, 0.01f}), kSteel, kMatMetal);   // rear notch
       mb.box(M::translate({0.035f, 0.035f, -0.02f}) * M::rotateZ(-0.6f) * M::scale({0.04f, 0.01f, 0.01f}), kSteel, kMatMetal);  // bolt
       mb.blob(M::translate({0.058f, 0.025f, -0.02f}) * M::scale({0.009f, 0.009f, 0.009f}), 1, 0, kSteel, kMatMetal, 1, 0, 0);
       mb.box(M::translate({0, -0.012f, -0.035f}) * M::scale({0.005f, 0.02f, 0.006f}), kSteel, kMatMetal);
@@ -391,11 +388,227 @@ void buildItemModel(Item item, MeshBuilder& mb) {
       for (float x : {-0.1f, 0.1f})
         mb.cylinder(M::translate({x - 0.01f, 0.09f, 0}) * M::rotateZ(-kHalfPi) * M::scale({0.095f, 0.02f, 0.095f}), 14, 1, 1, kLash * 0.5f, kMatCloth);
       break;
+    case Item::Revolver:
+      mb.box(M::translate({0, -0.055f, 0.012f}) * M::rotateX(-0.35f) * M::scale({0.03f, 0.1f, 0.045f}), kRifleWood, kMatWood);
+      mb.box(M::translate({0, 0.012f, -0.035f}) * M::scale({0.03f, 0.04f, 0.09f}), kSteel * 0.6f, kMatMetal);
+      mb.cylinder(M::translate({0, 0.03f, -0.035f}) * M::rotateX(-kHalfPi) * M::scale({0.023f, 0.05f, 0.023f}), 12, 1, 1, kSteel * 0.7f, kMatMetal);
+      mb.cylinder(M::translate({0, 0.035f, -0.075f}) * M::rotateX(-kHalfPi) * M::scale({0.009f, 0.14f, 0.009f}), 10, 1, 1, kSteel * 0.6f, kMatMetal);
+      mb.box(M::translate({0, 0.035f, -0.14f}) * M::scale({0.012f, 0.014f, 0.1f}), kSteel * 0.6f, kMatMetal);  // ejector rod housing
+      mb.box(M::translate({0, 0.05f, 0.0f}) * M::rotateX(0.5f) * M::scale({0.008f, 0.025f, 0.012f}), kSteel, kMatMetal);  // hammer
+      mb.box(M::translate({0, 0.05f, -0.2f}) * M::scale({0.005f, 0.012f, 0.008f}), kSteel, kMatMetal);
+      mb.box(M::translate({0, -0.012f, -0.03f}) * M::scale({0.005f, 0.02f, 0.006f}), kSteel, kMatMetal);
+      break;
+    case Item::SMG:
+      mb.box(M::translate({0, -0.055f, 0.03f}) * M::rotateX(-0.25f) * M::scale({0.03f, 0.1f, 0.045f}), kPolymer, kMatPlain);
+      mb.box(M::translate({0, 0.03f, -0.1f}) * M::scale({0.046f, 0.07f, 0.32f}), kGunMetal, kMatMetal);
+      mb.cylinder(M::translate({0, 0.035f, -0.26f}) * M::rotateX(-kHalfPi) * M::scale({0.02f, 0.1f, 0.02f}), 12, 1, 1, kPolymer, kMatPlain);
+      mb.cylinder(M::translate({0, 0.035f, -0.3f}) * M::rotateX(-kHalfPi) * M::scale({0.009f, 0.06f, 0.009f}), 10, 1, 1, kGunMetal, kMatMetal);
+      mb.box(M::translate({0, -0.07f, -0.08f}) * M::rotateX(0.1f) * M::scale({0.028f, 0.15f, 0.04f}), kGunMetal, kMatMetal);  // magazine
+      for (float x : {-0.02f, 0.02f})
+        mb.box(M::translate({x, 0.02f, 0.18f}) * M::scale({0.006f, 0.012f, 0.2f}), kSteel * 0.6f, kMatMetal);  // wire stock
+      mb.box(M::translate({0, -0.005f, 0.28f}) * M::scale({0.05f, 0.06f, 0.012f}), kPolymer, kMatPlain);
+      mb.box(M::translate({0, 0.07f, -0.24f}) * M::scale({0.006f, 0.014f, 0.008f}), kSteel, kMatMetal);
+      break;
+    case Item::Shotgun:
+      mb.box(M::translate({0, -0.045f, 0.03f}) * M::rotateX(-0.3f) * M::scale({0.03f, 0.08f, 0.045f}), kRifleWood, kMatWood);
+      mb.box(M::translate({0, -0.02f, 0.22f}) * M::rotateX(0.08f) * M::scale({0.042f, 0.09f, 0.3f}), kRifleWood, kMatWood);
+      mb.box(M::translate({0, 0.025f, -0.06f}) * M::scale({0.05f, 0.07f, 0.24f}), kGunMetal, kMatMetal);
+      mb.cylinder(M::translate({0, 0.038f, -0.17f}) * M::rotateX(-kHalfPi) * M::scale({0.013f, 0.61f, 0.013f}), 12, 1, 1, kGunMetal, kMatMetal);
+      mb.cylinder(M::translate({0, 0.012f, -0.17f}) * M::rotateX(-kHalfPi) * M::scale({0.011f, 0.5f, 0.011f}), 12, 1, 1, kGunMetal, kMatMetal);
+      mb.box(M::translate({0, 0.012f, -0.38f}) * M::scale({0.05f, 0.045f, 0.18f}), kRifleWood, kMatWood);  // pump
+      mb.blob(M::translate({0, 0.055f, -0.76f}) * M::scale({0.006f, 0.006f, 0.006f}), 1, 0, kSteel, kMatMetal, 1, 0, 0);  // bead sight
+      break;
+    case Item::AssaultRifle:
+      mb.box(M::translate({0, -0.05f, 0.03f}) * M::rotateX(-0.3f) * M::scale({0.03f, 0.09f, 0.045f}), kPolymer, kMatPlain);
+      mb.box(M::translate({0, 0.03f, -0.1f}) * M::scale({0.05f, 0.08f, 0.38f}), kGunMetal, kMatMetal);
+      mb.box(M::translate({0, 0.03f, -0.42f}) * M::scale({0.056f, 0.06f, 0.28f}), kRifleWood, kMatWood);  // handguard
+      mb.cylinder(M::translate({0, 0.035f, -0.55f}) * M::rotateX(-kHalfPi) * M::scale({0.01f, 0.17f, 0.01f}), 10, 1, 1, kGunMetal, kMatMetal);
+      mb.box(M::translate({0, 0.075f, -0.5f}) * M::scale({0.006f, 0.04f, 0.008f}), kGunMetal, kMatMetal);  // front sight post
+      for (int k = 0; k < 3; ++k)  // curved magazine
+        mb.box(M::translate({0, -0.05f - 0.045f * k, -0.07f + 0.018f * k * k}) * M::rotateX(0.18f * k) * M::scale({0.028f, 0.05f, 0.05f}),
+               kGunMetal * 1.3f, kMatMetal);
+      mb.box(M::translate({0, 0.01f, 0.22f}) * M::rotateX(0.06f) * M::scale({0.04f, 0.08f, 0.26f}), kRifleWood, kMatWood);
+      mb.box(M::translate({0, 0.0f, 0.355f}) * M::scale({0.043f, 0.1f, 0.012f}), kPolymer, kMatPlain);
+      mb.box(M::translate({0, 0.074f, -0.08f}) * M::scale({0.022f, 0.008f, 0.2f}), kSteel * 0.5f, kMatMetal);  // top rail
+      break;
+    case Item::Sniper:
+      mb.box(M::translate({0, -0.05f, 0.04f}) * M::rotateX(-0.3f) * M::scale({0.03f, 0.09f, 0.045f}), kPolymer, kMatPlain);
+      mb.box(M::translate({0, 0.025f, -0.1f}) * M::scale({0.05f, 0.065f, 0.3f}), kGunMetal, kMatMetal);
+      mb.cylinder(M::translate({0, 0.03f, -0.25f}) * M::rotateX(-kHalfPi) * M::scale({0.014f, 0.77f, 0.014f}), 12, 1, 0.8f, kGunMetal, kMatMetal);
+      mb.box(M::translate({0, 0.0f, -0.4f}) * M::scale({0.05f, 0.05f, 0.32f}), Vec3{0.12f, 0.13f, 0.10f}, kMatPlain);  // olive stock
+      mb.box(M::translate({0, -0.015f, 0.24f}) * M::rotateX(0.05f) * M::scale({0.045f, 0.1f, 0.32f}), Vec3{0.12f, 0.13f, 0.10f}, kMatPlain);
+      mb.box(M::translate({0, 0.05f, 0.18f}) * M::scale({0.04f, 0.03f, 0.12f}), Vec3{0.10f, 0.11f, 0.08f}, kMatPlain);  // cheek rest
+      mb.box(M::translate({0.04f, 0.035f, 0.0f}) * M::rotateZ(-0.4f) * M::scale({0.05f, 0.012f, 0.012f}), kSteel, kMatMetal);  // bolt
+      mb.blob(M::translate({0.065f, 0.025f, 0.0f}) * M::scale({0.011f, 0.011f, 0.011f}), 2, 0, kSteel, kMatMetal, 1, 0, 0);
+      for (float x : {-0.015f, 0.015f})  // folded bipod
+        mb.box(M::translate({x, -0.02f, -0.52f}) * M::scale({0.006f, 0.006f, 0.16f}), kSteel * 0.5f, kMatMetal);
+      break;
+    case Item::Bow: {
+      Vec3 prev{0, -0.42f, -0.06f};
+      for (int k = -6; k <= 6; ++k) {  // curved limbs, thickest at the grip
+        float t = static_cast<float>(k + 1) / 7.0f;
+        Vec3 next{0, t * 0.42f, -0.06f + 0.11f * t * t};
+        if (k > -6) {
+          float th = 0.022f - 0.012f * std::fabs(t);
+          mb.box(M::beam(prev, next, th, th * 1.6f), Vec3{0.30f, 0.17f, 0.07f}, kMatWood);
+        }
+        prev = next;
+      }
+      mb.box(M::translate({0, 0, -0.06f}) * M::scale({0.03f, 0.1f, 0.035f}), kLash * 0.6f, kMatCloth);  // grip wrap
+      mb.box(M::beam({0, 0.42f, 0.05f}, {0, -0.42f, 0.05f}, 0.003f, 0.003f), Vec3{0.7f, 0.68f, 0.6f}, kMatPlain);  // string
+      break;
+    }
+    case Item::Arrow:
+      for (int k = 0; k < 3; ++k) {
+        Vec3 o{(k - 1) * 0.025f, 0, 0};
+        mb.cylinder(M::translate(o) * M::scale({0.004f, 0.5f, 0.004f}), 6, 1, 1, Vec3{0.35f, 0.22f, 0.10f}, kMatWood);
+        mb.cylinder(M::translate(o + Vec3{0, 0.5f, 0}) * M::scale({0.009f, 0.04f, 0.009f}), 6, 1, 0, kStoneCol, kMatRock);
+        mb.box(M::translate(o + Vec3{0, 0.04f, 0}) * M::scale({0.02f, 0.05f, 0.002f}), Vec3{0.6f, 0.6f, 0.55f}, kMatPlain);
+      }
+      break;
+    case Item::Shells:
+      for (int k = 0; k < 3; ++k) {
+        Vec3 p{(k - 1) * 0.03f, 0, (k % 2) * 0.02f};
+        mb.cylinder(M::translate(p) * M::scale({0.012f, 0.016f, 0.012f}), 12, 1, 1, kBrass, kMatMetal);
+        mb.cylinder(M::translate(p + Vec3{0, 0.016f, 0}) * M::scale({0.0115f, 0.05f, 0.0115f}), 12, 1, 1, Vec3{0.45f, 0.04f, 0.03f}, kMatPlain);
+      }
+      break;
+    case Item::Coal:
+      for (int k = 0; k < 3; ++k)
+        mb.blob(M::translate({(k - 1) * 0.06f, 0.04f, (k % 2) * 0.04f}) * M::scale({0.05f, 0.04f, 0.05f}), 70u + k, 0.4f,
+                Vec3{0.03f, 0.03f, 0.035f}, kMatRock, 1, 0, 0.1f, 30);
+      break;
+    case Item::HQMetalOre:
+      mb.blob(M::scale({0.12f, 0.09f, 0.11f}), 14, 0.35f, Vec3{0.20f, 0.20f, 0.21f}, kMatRock, 2, 0, 0.05f, 40, 2);
+      for (int k = 0; k < 4; ++k)
+        mb.blob(M::translate({std::cos(k * 1.6f) * 0.09f, 0.04f + 0.02f * k, std::sin(k * 1.6f) * 0.08f}) * M::scale({0.03f, 0.04f, 0.03f}),
+                80u + k, 0.3f, Vec3{0.30f, 0.45f, 0.70f}, kMatMetal, 1, 0, 0.05f, 30);
+      break;
+    case Item::HQMetal:
+      for (int k = 0; k < 2; ++k)
+        mb.box(M::translate({0, 0.025f + k * 0.05f, k * 0.02f}) * M::rotateY(k * 0.3f) * M::scale({0.18f, 0.05f, 0.08f}),
+               Vec3{0.45f, 0.52f, 0.62f}, kMatMetal);
+      break;
+    case Item::Scrap:
+      mb.box(M::translate({-0.04f, 0.02f, 0}) * M::rotateY(0.4f) * M::rotateZ(0.2f) * M::scale({0.12f, 0.02f, 0.07f}), Vec3{0.35f, 0.15f, 0.06f}, kMatMetal);
+      mb.cylinder(M::translate({0.05f, 0.0f, 0.02f}) * M::scale({0.03f, 0.08f, 0.03f}), 10, 1, 1, Vec3{0.30f, 0.18f, 0.10f}, kMatMetal);
+      mb.box(M::translate({0.0f, 0.05f, -0.04f}) * M::rotateX(0.5f) * M::scale({0.08f, 0.01f, 0.05f}), kSteel * 0.6f, kMatMetal);
+      break;
+    case Item::Rope:
+      for (int k = 0; k < 10; ++k) {  // a coil
+        float a0 = k * 0.628f, a1 = (k + 1) * 0.628f;
+        mb.box(M::beam({std::cos(a0) * 0.08f, 0.02f + k * 0.004f, std::sin(a0) * 0.08f}, {std::cos(a1) * 0.08f, 0.02f + k * 0.004f, std::sin(a1) * 0.08f},
+                       0.018f, 0.018f),
+               kLash, kMatCloth);
+      }
+      break;
+    case Item::GunParts:
+      mb.cylinder(M::translate({-0.05f, 0, 0}) * M::scale({0.015f, 0.09f, 0.015f}), 10, 1, 1, kSteel, kMatMetal);
+      mb.box(M::translate({0.03f, 0.02f, 0}) * M::rotateY(0.4f) * M::scale({0.08f, 0.03f, 0.03f}), kGunMetal, kMatMetal);
+      mb.box(M::translate({0.02f, 0.05f, 0.03f}) * M::scale({0.02f, 0.02f, 0.06f}), kSteel * 0.7f, kMatMetal);
+      break;
+    case Item::Explosives:
+      for (int k = 0; k < 3; ++k)
+        mb.cylinder(M::translate({(k - 1) * 0.035f, 0, 0}) * M::scale({0.016f, 0.15f, 0.016f}), 10, 1, 1, Vec3{0.50f, 0.08f, 0.05f}, kMatCloth);
+      mb.box(M::translate({0, 0.075f, 0}) * M::scale({0.11f, 0.02f, 0.036f}), Vec3{0.05f, 0.05f, 0.05f}, kMatPlain);  // tape
+      break;
+    case Item::PipeBomb:
+      mb.cylinder(M::rotateZ(-kHalfPi) * M::translate({0, -0.1f, 0}) * M::scale({0.025f, 0.2f, 0.025f}), 12, 1, 1, kSteel * 0.6f, kMatMetal);
+      for (float x : {-0.1f, 0.1f}) mb.box(M::translate({x, 0, 0}) * M::scale({0.02f, 0.06f, 0.06f}), kSteel * 0.4f, kMatMetal);
+      mb.box(M::beam({0.11f, 0.0f, 0.0f}, {0.15f, 0.04f, 0.0f}, 0.004f, 0.004f), Vec3{0.6f, 0.55f, 0.4f}, kMatPlain);  // fuse
+      break;
+    case Item::ExplosiveCharge:
+      mb.box(M::translate({0, 0.03f, 0}) * M::scale({0.16f, 0.06f, 0.1f}), Vec3{0.45f, 0.40f, 0.30f}, kMatCloth);
+      mb.box(M::translate({0, 0.07f, 0}) * M::scale({0.06f, 0.02f, 0.04f}), Vec3{0.05f, 0.05f, 0.05f}, kMatPlain);  // timer
+      mb.box(M::translate({0, 0.081f, 0}) * M::scale({0.03f, 0.003f, 0.02f}), Vec3{0.8f, 0.05f, 0.03f}, kMatEmissive);
+      mb.box(M::beam({-0.03f, 0.07f, 0.0f}, {-0.08f, 0.06f, 0.05f}, 0.004f, 0.004f), Vec3{0.6f, 0.05f, 0.03f}, kMatPlain);
+      break;
+    case Item::CodeLock:
+      mb.box(M::translate({0, 0.06f, 0}) * M::scale({0.07f, 0.12f, 0.025f}), Vec3{0.55f, 0.48f, 0.12f}, kMatMetal);
+      for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 3; ++c)
+          mb.box(M::translate({(c - 1) * 0.018f, 0.03f + r * 0.02f, -0.014f}) * M::scale({0.012f, 0.012f, 0.004f}), Vec3{0.06f, 0.06f, 0.06f}, kMatPlain);
+      break;
+    case Item::LandClaim:
+      mb.box(M::translate({0, 0.25f, 0}) * M::scale({0.14f, 0.5f, 0.12f}), Vec3{0.24f, 0.13f, 0.05f}, kMatWood);
+      mb.box(M::translate({0, 0.42f, -0.065f}) * M::scale({0.1f, 0.12f, 0.01f}), Vec3{0.6f, 0.55f, 0.35f}, kMatCloth);
+      break;
+    case Item::LargeBox:
+      mb.box(M::translate({0, 0.12f, 0}) * M::scale({0.5f, 0.24f, 0.25f}), Vec3{0.28f, 0.16f, 0.07f}, kMatWood);
+      for (float x : {-0.24f, 0.24f}) mb.box(M::translate({x, 0.12f, 0}) * M::scale({0.03f, 0.25f, 0.26f}), kSteel * 0.5f, kMatMetal);
+      break;
+    case Item::SmallStash:
+      mb.blob(M::translate({0, 0.03f, 0}) * M::scale({0.12f, 0.035f, 0.12f}), 9, 0.1f, Vec3{0.30f, 0.24f, 0.14f}, kMatCloth, 2);
+      break;
+    case Item::SheetMetalDoor:
+    case Item::ArmoredDoor: {
+      Vec3 c = item == Item::ArmoredDoor ? Vec3{0.12f, 0.13f, 0.15f} : Vec3{0.30f, 0.31f, 0.33f};
+      mb.box(M::translate({0, 0.5f, 0}) * M::scale({0.5f, 1.0f, 0.05f}), c, kMatMetal);
+      for (float y : {0.2f, 0.8f}) mb.box(M::translate({0, y, 0.03f}) * M::scale({0.5f, 0.06f, 0.02f}), c * 0.7f, kMatMetal);
+      mb.box(M::translate({0.18f, 0.5f, 0.04f}) * M::scale({0.03f, 0.06f, 0.03f}), kSteel, kMatMetal);
+      break;
+    }
+    // --- attachments: origin at the gun's mount point ---
+    case Item::HoloSight:
+      mb.box(M::translate({0, 0.006f, 0}) * M::scale({0.03f, 0.012f, 0.05f}), kGunMetal, kMatMetal);
+      for (float x : {-0.017f, 0.017f}) mb.box(M::translate({x, 0.028f, 0.0f}) * M::scale({0.005f, 0.04f, 0.012f}), kGunMetal, kMatMetal);
+      mb.box(M::translate({0, 0.05f, 0.0f}) * M::scale({0.039f, 0.006f, 0.012f}), kGunMetal, kMatMetal);
+      break;
+    case Item::Scope4x:
+    case Item::Scope8x: {
+      float len = item == Item::Scope8x ? 0.32f : 0.22f;
+      float r = item == Item::Scope8x ? 0.018f : 0.016f;
+      for (float z : {-0.05f, 0.05f}) mb.box(M::translate({0, 0.01f, z}) * M::scale({0.02f, 0.02f, 0.015f}), kSteel * 0.5f, kMatMetal);
+      mb.cylinder(M::translate({0, 0.03f, len * 0.5f}) * M::rotateX(-kHalfPi) * M::scale({r, len, r}), 14, 1, 1, kGunMetal, kMatMetal);
+      mb.cylinder(M::translate({0, 0.03f, -len * 0.5f + 0.04f}) * M::rotateX(-kHalfPi) * M::scale({r * 1.45f, 0.06f, r * 1.45f}), 14, 1, 1,
+                  kGunMetal, kMatMetal);  // objective bell
+      mb.cylinder(M::translate({0, 0.03f, len * 0.5f}) * M::rotateX(-kHalfPi) * M::scale({r * 1.2f, 0.04f, r * 1.2f}), 14, 1, 1, kGunMetal, kMatMetal);
+      mb.cylinder(M::translate({0, 0.03f + r, 0}) * M::scale({0.007f, 0.012f, 0.007f}), 8, 1, 1, kGunMetal, kMatMetal);  // turret
+      break;
+    }
+    case Item::Silencer:
+      mb.cylinder(M::rotateX(-kHalfPi) * M::scale({0.017f, 0.17f, 0.017f}), 14, 1, 1, Vec3{0.03f, 0.03f, 0.035f}, kMatMetal);
+      break;
+    case Item::MuzzleBrake:
+      mb.cylinder(M::rotateX(-kHalfPi) * M::scale({0.015f, 0.065f, 0.015f}), 12, 1, 1, kGunMetal, kMatMetal);
+      for (float z : {-0.02f, -0.045f}) mb.box(M::translate({0, 0, z}) * M::scale({0.034f, 0.008f, 0.01f}), kSteel * 0.5f, kMatMetal);
+      break;
+    case Item::VerticalGrip:
+      mb.box(M::translate({0, -0.008f, 0}) * M::scale({0.03f, 0.016f, 0.05f}), kPolymer, kMatPlain);
+      mb.cylinder(M::translate({0, -0.11f, 0}) * M::scale({0.016f, 0.1f, 0.016f}), 10, 1, 1.1f, kPolymer, kMatPlain);
+      break;
+    case Item::LaserSight:
+      mb.box(M::translate({0, -0.016f, 0}) * M::scale({0.026f, 0.03f, 0.07f}), kPolymer, kMatPlain);
+      mb.cylinder(M::translate({0, -0.016f, -0.036f}) * M::rotateX(-kHalfPi) * M::scale({0.007f, 0.003f, 0.007f}), 8, 1, 1,
+                  Vec3{3.0f, 0.1f, 0.05f}, kMatEmissive);
+      break;
     default: {
       const Vec3 c = itemDef(item).color;
       mb.box(M::scale({0.1f, 0.1f, 0.1f}), Vec3{c.x * c.x, c.y * c.y, c.z * c.z}, kMatPlain);
       break;
     }
+  }
+}
+
+GunMounts gunMounts(Item gun) {
+  switch (gun) {
+    case Item::Pistol: return {{0, 0.053f, -0.04f}, {0, 0.032f, -0.17f}, {0, -0.02f, -0.11f}};
+    case Item::Revolver: return {{0, 0.055f, -0.06f}, {0, 0.035f, -0.215f}, {0, -0.01f, -0.13f}};
+    case Item::SMG: return {{0, 0.066f, -0.08f}, {0, 0.035f, -0.36f}, {0, -0.005f, -0.22f}};
+    case Item::Shotgun: return {{0, 0.06f, -0.05f}, {0, 0.038f, -0.78f}, {0, -0.012f, -0.38f}};
+    case Item::AssaultRifle: return {{0, 0.078f, -0.1f}, {0, 0.035f, -0.72f}, {0, -0.002f, -0.42f}};
+    case Item::Rifle: return {{0, 0.048f, -0.08f}, {0, 0.03f, -0.82f}, {0, -0.025f, -0.36f}};
+    case Item::Sniper: return {{0, 0.058f, -0.08f}, {0, 0.03f, -1.02f}, {0, -0.025f, -0.42f}};
+    default: return {{0, 0.05f, 0}, {0, 0.03f, -0.2f}, {0, -0.02f, -0.1f}};
+  }
+}
+
+float sightEyeHeight(Item attachment) {
+  switch (attachment) {
+    case Item::HoloSight: return 0.028f;
+    case Item::Scope4x:
+    case Item::Scope8x: return 0.03f;
+    default: return 0.0f;
   }
 }
 
@@ -491,16 +704,23 @@ void buildNode(const ResourceNode& n, MeshBuilder& mb, bool detailed) {
     }
     case NodeType::Stone:
     case NodeType::MetalOre:
-    case NodeType::Sulfur: {
-      Vec3 base = n.type == NodeType::Stone ? Vec3{0.30f, 0.29f, 0.27f} : Vec3{0.22f, 0.21f, 0.20f};
+    case NodeType::Sulfur:
+    case NodeType::Coal:
+    case NodeType::HQMetal: {
+      Vec3 base = n.type == NodeType::Stone ? Vec3{0.30f, 0.29f, 0.27f}
+                  : n.type == NodeType::Coal ? Vec3{0.07f, 0.07f, 0.075f}
+                                             : Vec3{0.22f, 0.21f, 0.20f};
       int sub = detailed ? 2 : 1;
       mb.blob(M::translate(p + Vec3{0, 0.4f * s, 0}) * M::rotateY(rot) * M::scale({1.05f * s, 0.8f * s, 0.9f * s}), id, 0.38f,
               base, kMatRock, sub, 0, 0.05f, 38, 2);
       mb.blob(M::translate(p + Vec3{0.65f * s, 0.2f * s, 0.3f * s}) * M::rotateY(rot * 2) * M::scale(Vec3{0.55f, 0.45f, 0.5f} * s),
               id + 9u, 0.4f, base * 0.9f, kMatRock, 1, 0, 0.05f, 38, 2);
       if (n.type != NodeType::Stone) {
-        Vec3 ore = n.type == NodeType::MetalOre ? Vec3{0.45f, 0.16f, 0.05f} : Vec3{0.78f, 0.62f, 0.05f};
-        int mat = n.type == NodeType::MetalOre ? kMatMetal : kMatRock;
+        Vec3 ore = n.type == NodeType::MetalOre ? Vec3{0.45f, 0.16f, 0.05f}
+                   : n.type == NodeType::Sulfur   ? Vec3{0.78f, 0.62f, 0.05f}
+                   : n.type == NodeType::Coal     ? Vec3{0.02f, 0.02f, 0.02f}
+                                                  : Vec3{0.30f, 0.45f, 0.75f};
+        int mat = n.type == NodeType::MetalOre || n.type == NodeType::HQMetal ? kMatMetal : kMatRock;
         for (int k = 0; k < 7; ++k) {
           float a = rot + k * 0.9f;
           float r = 0.78f * s;
@@ -533,6 +753,17 @@ void buildNode(const ResourceNode& n, MeshBuilder& mb, bool detailed) {
         Vec3 q = p + Vec3{std::cos(a) * r, h, std::sin(a) * r};
         mb.blob(M::translate(q) * M::scale({0.055f, 0.055f, 0.055f}), id + k, 0.05f, Vec3{0.50f, 0.02f, 0.06f}, kMatPlain, 1, 0.3f, 0.1f, 80);
       }
+      break;
+    }
+    case NodeType::Scrap: {
+      // Junk washed up on the shore: rusty sheets, a tipped barrel, a crate.
+      const Vec3 rust{0.30f, 0.12f, 0.04f};
+      mb.cylinder(M::translate(p + Vec3{0.2f, 0.25f, 0}) * M::rotateZ(1.3f) * M::rotateY(rot) * M::scale({0.28f, 0.85f, 0.28f}), 12, 1, 1,
+                  rust, kMatMetal);
+      mb.box(M::translate(p + Vec3{-0.35f, 0.08f, 0.2f}) * M::rotateY(rot) * M::rotateX(0.2f) * M::scale({0.9f, 0.04f, 0.6f}),
+             Vec3{0.25f, 0.20f, 0.16f}, kMatMetal);
+      mb.box(M::translate(p + Vec3{-0.2f, 0.2f, -0.35f}) * M::rotateY(rot * 2) * M::scale({0.45f, 0.4f, 0.45f}), Vec3{0.20f, 0.12f, 0.06f}, kMatWood);
+      mb.box(M::translate(p + Vec3{0.4f, 0.05f, -0.3f}) * M::rotateY(rot + 1) * M::scale({0.5f, 0.06f, 0.08f}), kSteel * 0.4f, kMatMetal);
       break;
     }
     case NodeType::Mushroom:
@@ -608,7 +839,10 @@ void buildObject(const WorldObject& o, MeshBuilder& mb) {
       objectBoxes(o, boxes, true);
       const AABB& b = boxes[0].box;
       Vec3 ctr = (b.min + b.max) * 0.5f, size = b.max - b.min;
-      mb.box(M::translate(ctr) * M::scale(size), Vec3{0.18f, 0.09f, 0.035f} * wear, kMatWood);
+      const bool metalDoor = o.tier >= Tier::Stone;
+      Vec3 doorCol = o.tier == Tier::Metal ? Vec3{0.12f, 0.13f, 0.15f} : o.tier == Tier::Stone ? Vec3{0.30f, 0.31f, 0.33f}
+                                                                                               : Vec3{0.18f, 0.09f, 0.035f};
+      mb.box(M::translate(ctr) * M::scale(size), doorCol * wear, metalDoor ? kMatMetal : kMatWood);
       bool open = o.flags & kDoorOpen;
       bool alongX = (o.rot % 2 == 0) != open;  // which way the slab runs now
       Vec3 across = alongX ? Vec3{0, 0, 1} : Vec3{1, 0, 0};
@@ -617,6 +851,9 @@ void buildObject(const WorldObject& o, MeshBuilder& mb) {
       for (float side : {-1.0f, 1.0f}) {
         Vec3 f = across * (side * (th + 0.012f));
         mb.blob(M::translate(ctr + f + along * 0.45f) * M::scale(Vec3{0.03f, 0.03f, 0.03f}), 1, 0, kSteel, kMatMetal, 1, 0, 0);
+        if (o.flags & kLocked)  // code lock keypad by the handle
+          mb.box(M::translate(ctr + f * 1.6f + along * 0.45f + Vec3{0, 0.18f, 0}) * M::scale(along * 0.06f + Vec3{0, 0.11f, 0} + across * 0.02f),
+                 Vec3{0.55f, 0.48f, 0.12f}, kMatMetal);
         mb.box(M::beam(ctr + f - along * 0.5f + Vec3{0, -0.8f, 0}, ctr + f + along * 0.5f + Vec3{0, 0.8f, 0}, 0.1f, 0.02f),
                Vec3{0.13f, 0.06f, 0.025f}, kMatWood);
       }
@@ -633,11 +870,41 @@ void buildObject(const WorldObject& o, MeshBuilder& mb) {
       mb.box(base * M::translate({-0.3f, 0.92f, 0.1f}) * M::rotateY(0.3f) * M::scale({0.12f, 0.03f, 0.04f}), kHandle, kMatWood);
       break;
     case ObjType::StorageBox:
+      if (o.flags & kLocked) mb.box(base * M::translate({0, 0.38f, -0.33f}) * M::scale({0.07f, 0.12f, 0.03f}), Vec3{0.55f, 0.48f, 0.12f}, kMatMetal);
       mb.box(base * M::translate({0, 0.27f, 0}) * M::scale({0.9f, 0.54f, 0.6f}), Vec3{0.28f, 0.16f, 0.07f} * wear, kMatWood);
       mb.box(base * M::translate({0, 0.56f, 0}) * M::scale({0.94f, 0.08f, 0.64f}), Vec3{0.22f, 0.12f, 0.05f} * wear, kMatWood);
       for (float x : {-0.3f, 0.3f}) mb.box(base * M::translate({x, 0.3f, 0}) * M::scale({0.06f, 0.62f, 0.63f}), kSteel * 0.5f, kMatMetal);
       mb.box(base * M::translate({0, 0.45f, -0.32f}) * M::scale({0.1f, 0.12f, 0.03f}), kSteel, kMatMetal);
       break;
+    case ObjType::LargeBox:
+      mb.box(base * M::translate({0, 0.37f, 0}) * M::scale({1.6f, 0.74f, 0.7f}), Vec3{0.28f, 0.16f, 0.07f} * wear, kMatWood);
+      mb.box(base * M::translate({0, 0.77f, 0}) * M::scale({1.64f, 0.08f, 0.74f}), Vec3{0.22f, 0.12f, 0.05f} * wear, kMatWood);
+      for (float x : {-0.78f, 0.78f})
+        for (float z : {-0.33f, 0.33f})
+          mb.box(base * M::translate({x, 0.4f, z}) * M::scale({0.08f, 0.82f, 0.08f}), kSteel * 0.45f, kMatMetal);  // corner guards
+      if (o.flags & kLocked) mb.box(base * M::translate({0, 0.55f, -0.37f}) * M::scale({0.07f, 0.12f, 0.03f}), Vec3{0.55f, 0.48f, 0.12f}, kMatMetal);
+      break;
+    case ObjType::Stash:
+      mb.blob(base * M::translate({0, 0.05f, 0}) * M::scale({0.25f, 0.06f, 0.25f}), o.id, 0.15f, Vec3{0.20f, 0.17f, 0.10f} * wear, kMatCloth, 2);
+      break;
+    case ObjType::LandClaim:
+      mb.box(base * M::translate({0, 0.8f, 0}) * M::scale({0.5f, 1.6f, 0.4f}), Vec3{0.22f, 0.12f, 0.05f} * wear, kMatWood);
+      mb.box(base * M::translate({0, 1.05f, -0.21f}) * M::scale({0.36f, 0.42f, 0.02f}), Vec3{0.55f, 0.50f, 0.32f}, kMatCloth);  // claim notice
+      mb.cylinder(base * M::translate({0, 1.6f, 0}) * M::scale({0.015f, 0.6f, 0.015f}), 6, 1, 1, kSteel * 0.6f, kMatMetal);  // flag pole
+      mb.box(base * M::translate({0.16f, 2.08f, 0}) * M::scale({0.3f, 0.18f, 0.01f}), Vec3{0.55f, 0.08f, 0.05f}, kMatCloth, 1.0f);
+      if (o.flags & kLocked) mb.box(base * M::translate({0.15f, 0.75f, -0.21f}) * M::scale({0.07f, 0.12f, 0.03f}), Vec3{0.55f, 0.48f, 0.12f}, kMatMetal);
+      break;
+    case ObjType::Charge: {
+      MeshBuilder bomb;
+      buildItemModel(Item::ExplosiveCharge, bomb);
+      for (auto vtx : bomb.v) {  // copy the item model into place
+        Vec3 q = Vec3{vtx.px, vtx.py, vtx.pz} + o.pos - Vec3{0, 0.05f, 0};
+        vtx.px = q.x; vtx.py = q.y; vtx.pz = q.z;
+        mb.idx.push_back(static_cast<uint32_t>(mb.v.size()));
+        mb.v.push_back(vtx);
+      }
+      break;
+    }
     case ObjType::SleepingBag:
       mb.blob(base * M::translate({0, 0.07f, 0.1f}) * M::scale({0.4f, 0.09f, 0.9f}), o.id, 0.05f, Vec3{0.42f, 0.06f, 0.04f} * wear, kMatCloth, 2);
       mb.blob(base * M::translate({0, 0.1f, -0.82f}) * M::scale({0.3f, 0.08f, 0.16f}), o.id + 1, 0.05f, Vec3{0.55f, 0.50f, 0.40f}, kMatCloth, 2);

@@ -40,7 +40,11 @@ class NetClient {
   void dropItem(uint32_t container, int slot);
   void craft(int recipe, int times);
   void cancelCraft(int queueIndex);
-  void place(ObjType type, const Vec3& pos, uint8_t rot);
+  void place(ObjType type, const Vec3& pos, uint8_t rot, Item item);
+  void attach(uint32_t container, int gunSlot, int attachmentSlot);
+  void detach(uint32_t container, int gunSlot, ModSlot slot);
+  void useOn(uint32_t objectId);                  // use the held item (code lock) on an object
+  void enterCode(uint32_t objectId, const std::string& code);
   void interactObject(uint32_t objectId);
   void interactNode(uint32_t nodeId);
   void closeContainer();
@@ -93,6 +97,27 @@ class NetClient {
   Rank rankOf(uint32_t id) const;
   Rank myRank() const { return rankOf(playerId_); }
   float timeOfDay() const { return timeOfDay_; }  // hours, 0..24
+
+  // Sounds the server asked us to play (other players' shots, hits, doors...).
+  struct SoundEvent {
+    Sound sound;
+    Vec3 pos;
+    bool positional;  // false: play flat (our own hit markers, gather thuds)
+  };
+  std::vector<SoundEvent> takeSounds() {
+    std::vector<SoundEvent> out;
+    out.swap(sounds_);
+    return out;
+  }
+  uint32_t inventoryVersion() const { return inventoryVersion_; }  // bumps on every inventory update
+  // A lock asked for a code: object id and mode (0 = choose, 1 = enter). Cleared when taken.
+  bool takeCodePrompt(uint32_t& objectId, uint8_t& mode) {
+    if (!codePromptObject_) return false;
+    objectId = codePromptObject_;
+    mode = codePromptMode_;
+    codePromptObject_ = 0;
+    return true;
+  }
   struct PlayerEntry {
     std::string name;
     Rank rank = Rank::Player;
@@ -169,6 +194,10 @@ class NetClient {
   std::string deathCause_;
   std::unordered_map<uint32_t, PlayerEntry> players_;
   float timeOfDay_ = 9.0f;
+  std::vector<SoundEvent> sounds_;
+  uint32_t inventoryVersion_ = 0;
+  uint32_t codePromptObject_ = 0;
+  uint8_t codePromptMode_ = 0;
 };
 
 }  // namespace sg

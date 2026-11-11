@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -91,8 +92,9 @@ void slotWidget(App& a, uint32_t container, int slot, const ItemStack& st, bool 
   ImGui::PushID(static_cast<int>(container));
   ImGui::PushID(slot);
   ImVec2 p = ImGui::GetCursorScreenPos();
-  ImGui::InvisibleButton("slot", ImVec2(size, size));
+  bool clicked = ImGui::InvisibleButton("slot", ImVec2(size, size));
   bool hovered = ImGui::IsItemHovered();
+  if (clicked && container == kSelfContainer && !st.empty() && itemDef(st.item).kind == ItemKind::Gun) a.selectedGun = slot;
   ImDrawList* dl = ImGui::GetWindowDrawList();
   dl->AddRectFilled(p, p + ImVec2(size, size), hovered ? rgba(0.28f, 0.28f, 0.30f, 0.95f) : rgba(0.16f, 0.16f, 0.18f, 0.9f), 6 * g_scale);
   if (selected) dl->AddRect(p, p + ImVec2(size, size), ImGui::GetColorU32(kAccent), 6 * g_scale, 0, 2.5f * g_scale);
@@ -124,7 +126,15 @@ void slotWidget(App& a, uint32_t container, int slot, const ItemStack& st, bool 
     ImGui::BeginTooltip();
     ImGui::TextColored(kAccent, "%s", d.name);
     ImGui::TextUnformatted(d.description);
-    if (d.kind == ItemKind::Gun) ImGui::TextColored(kMuted, "Damage %.0f  |  Uses %s", d.damage, itemDef(d.ammo).name);
+    if (d.kind == ItemKind::Gun) {
+      GunStats gs = gunStats(st);
+      ImGui::TextColored(kMuted, "Damage %.0f%s  |  %s  |  %u/%u rounds of %s", gs.damage, d.pellets > 1 ? " x8 pellets" : "",
+                         d.automatic ? "Automatic" : "Semi-auto", st.data, d.magSize, itemDef(d.ammo).name);
+      for (ModSlot ms : {ModSlot::Sight, ModSlot::Muzzle, ModSlot::Grip})
+        if (Item m = modAt(st, ms); m != Item::None) ImGui::TextColored(kGood, "+ %s", itemDef(m).name);
+      ImGui::TextColored(kAccent, "Click to manage attachments");
+    }
+    if (d.kind == ItemKind::Attachment) ImGui::TextColored(kAccent, "Drag onto a gun's attachment slot (click the gun first)");
     if (d.kind == ItemKind::Food) ImGui::TextColored(kMuted, "+%.0f food  +%.0f saturation", d.food, d.saturation);
     ImGui::TextColored(kMuted, "Right-click: quick move   Shift-drag: half   Drag outside: drop");
     ImGui::EndTooltip();
@@ -259,6 +269,9 @@ void uiMainMenu(App& a) {
   ImGui::TextColored(kMuted, "Mouse sensitivity");
   ImGui::SetNextItemWidth(-1);
   ImGui::SliderFloat("##sens", &a.mouseSensitivity, 0.2f, 3.0f, "%.2f");
+  ImGui::TextColored(kMuted, "Volume");
+  ImGui::SetNextItemWidth(-1);
+  ImGui::SliderFloat("##vol", &a.volume, 0.0f, 1.0f, "%.2f");
   ImGui::Spacing();
   if (wideButton("Quit")) a.quit = true;
   ImGui::End();
@@ -439,8 +452,53 @@ static void hudCrosshair(App& a) {
   ImGuiIO& io = ImGui::GetIO();
   ImDrawList* dl = ImGui::GetForegroundDrawList();
   ImVec2 c = io.DisplaySize * 0.5f;
-  dl->AddCircleFilled(c, 2.5f * g_scale, rgba(1, 1, 1, 0.9f));
-  dl->AddCircle(c, 3.5f * g_scale, rgba(0, 0, 0, 0.5f));
+  if (a.scoped) {
+    // Scope: black outside a circle, fine crosshairs with range marks.
+    ImDrawList* bg = ImGui::GetBackgroundDrawList();
+    float r = io.DisplaySize.y * 0.46f;
+    const int segs = 96;
+    for (int i = 0; i < segs; ++i) {  // fill everything outside the circle
+      float a0 = 2 * kPi * i / segs, a1 = 2 * kPi * (i + 1) / segs;
+      ImVec2 p0 = c + ImVec2(std::cos(a0), std::sin(a0)) * r, p1 = c + ImVec2(std::cos(a1), std::sin(a1)) * r;
+      ImVec2 q0 = c + ImVec2(std::cos(a0), std::sin(a0)) * (io.DisplaySize.x * 1.5f), q1 = c + ImVec2(std::cos(a1), std::sin(a1)) * (io.DisplaySize.x * 1.5f);
+      bg->AddQuadFilled(p0, q0, q1, p1, rgba(0, 0, 0, 1));
+    }
+    bg->AddCircle(c, r, rgba(0, 0, 0, 1), 96, 6 * g_scale);
+    bg->AddLine(c - ImVec2(r, 0), c + ImVec2(r, 0), rgba(0, 0, 0, 0.9f), 1.5f);
+    bg->AddLine(c - ImVec2(0, r), c + ImVec2(0, r), rgba(0, 0, 0, 0.9f), 1.5f);
+    for (int k = 1; k <= 5; ++k) {  // drop marks below the centre
+      float y = r * 0.06f * k, w = r * (k % 2 ? 0.03f : 0.05f);
+      bg->AddLine(c + ImVec2(-w, y), c + ImVec2(w, y), rgba(0, 0, 0, 0.9f), 1.5f);
+    }
+    return;
+  }
+  const bool gun = itemDef(a.heldItem()).kind == ItemKind::Gun;
+  if (a.holo) {
+    dl->AddCircleFilled(c, 2.2f * g_scale, rgba(1.0f, 0.12f, 0.1f, 0.95f));
+    dl->AddCircle(c, 9.0f * g_scale, rgba(1.0f, 0.12f, 0.1f, 0.6f), 32, 1.2f);
+  } else if (gun && a.aimT < 0.6f) {
+    // Hip-fire crosshair: four ticks that open up with the current spread.
+    float fovHalf = 70.0f * kPi / 180.0f * 0.5f;
+    float gap = std::tan(a.spreadNow) / std::tan(fovHalf) * io.DisplaySize.y * 0.5f + 4.0f * g_scale;
+    float len = 7.0f * g_scale;
+    ImU32 col = rgba(1, 1, 1, 0.85f * (1.0f - a.aimT));
+    dl->AddLine(c + ImVec2(gap, 0), c + ImVec2(gap + len, 0), col, 2.0f);
+    dl->AddLine(c - ImVec2(gap, 0), c - ImVec2(gap + len, 0), col, 2.0f);
+    dl->AddLine(c + ImVec2(0, gap), c + ImVec2(0, gap + len), col, 2.0f);
+    dl->AddLine(c - ImVec2(0, gap), c - ImVec2(0, gap + len), col, 2.0f);
+    dl->AddCircleFilled(c, 1.5f * g_scale, col);
+  } else if (!gun) {
+    dl->AddCircleFilled(c, 2.5f * g_scale, rgba(1, 1, 1, 0.9f));
+    dl->AddCircle(c, 3.5f * g_scale, rgba(0, 0, 0, 0.5f));
+  }
+  if (a.reloadEnd > a.now) {  // reload progress under the crosshair
+    float total = itemDef(a.heldItem()).reloadTime;
+    float frac = total > 0 ? 1.0f - static_cast<float>((a.reloadEnd - a.now) / total) : 1.0f;
+    ImVec2 p = c + ImVec2(-40 * g_scale, 26 * g_scale);
+    dl->AddRectFilled(p, p + ImVec2(80 * g_scale, 5 * g_scale), rgba(0, 0, 0, 0.5f), 2);
+    dl->AddRectFilled(p, p + ImVec2(80 * g_scale * frac, 5 * g_scale), ImGui::GetColorU32(kAccent), 2);
+    textCentered(dl, a.fontBody, a.fontBody->FontSize * 0.8f, c + ImVec2(0, 42 * g_scale), rgba(1, 1, 1, 0.8f), "Reloading");
+  }
   double since = a.now - a.net.lastHitTime();
   if (since < 0.25) {  // hit marker
     uint8_t f = a.net.lastHitFlags();
@@ -498,7 +556,8 @@ static void hudHotbar(App& a) {
     const ItemDef& d = itemDef(held);
     char buf[96];
     if (d.kind == ItemKind::Gun)
-      std::snprintf(buf, sizeof(buf), "%s   -   %d %s", d.name, countItem(inv, d.ammo), itemDef(d.ammo).name);
+      std::snprintf(buf, sizeof(buf), "%s   %d / %d   %s%s", d.name, a.predMag, countItem(inv, d.ammo), itemDef(d.ammo).name,
+                    d.automatic ? "   [auto]" : "");
     else
       std::snprintf(buf, sizeof(buf), "%s", d.name);
     textCentered(dl, a.fontBody, a.fontBody->FontSize, ImVec2(io.DisplaySize.x * 0.5f, p.y - 16 * g_scale), rgba(1, 1, 1, 0.9f), buf);
@@ -809,6 +868,50 @@ static void inventoryScreen(App& a) {
   if (q.size() > 4) ImGui::TextColored(kMuted, "+%zu more", q.size() - 4);
   ImGui::End();
 
+  // Weapon panel: attachments of the selected gun (below the inventory).
+  if (a.selectedGun >= 0 && a.selectedGun < static_cast<int>(inv.size()) && !inv[static_cast<size_t>(a.selectedGun)].empty() &&
+      itemDef(inv[static_cast<size_t>(a.selectedGun)].item).kind == ItemKind::Gun) {
+    const ItemStack& gun = inv[static_cast<size_t>(a.selectedGun)];
+    const ItemDef& gd = itemDef(gun.item);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - gridW * 0.5f, io.DisplaySize.y * 0.5f + invH * 0.5f + 12 * g_scale),
+                            ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(gridW, 0), ImGuiCond_Always);
+    ImGui::Begin("Attachments", nullptr, kPanel | ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::Text("%s", gd.name);
+    ImGui::SameLine();
+    ImGui::TextColored(kMuted, "  drag attachments in, click to remove");
+    const char* labels[] = {"Sight", "Muzzle", "Underbarrel"};
+    const uint8_t bits[] = {kModSight, kModMuzzle, kModGrip};
+    for (int ms = 0; ms < 3; ++ms) {
+      if (ms) ImGui::SameLine(0, 12 * g_scale);
+      ImGui::BeginGroup();
+      ImGui::TextColored(kMuted, "%s", labels[ms]);
+      ImVec2 p = ImGui::GetCursorScreenPos();
+      ImGui::PushID(500 + ms);
+      bool allowed = (gd.modSlots & bits[ms]) != 0;
+      bool clicked = ImGui::InvisibleButton("mod", ImVec2(slot, slot));
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      dl->AddRectFilled(p, p + ImVec2(slot, slot), allowed ? rgba(0.16f, 0.16f, 0.18f, 0.9f) : rgba(0.1f, 0.06f, 0.06f, 0.7f), 6 * g_scale);
+      Item m = modAt(gun, static_cast<ModSlot>(ms));
+      if (m != Item::None) drawItemIcon(dl, p, slot, {m, 1});
+      else if (!allowed) textCentered(dl, ImGui::GetFont(), ImGui::GetFontSize() * 0.7f, p + ImVec2(slot, slot) * 0.5f, rgba(1, 1, 1, 0.3f), "n/a");
+      if (clicked && m != Item::None) a.net.detach(kSelfContainer, a.selectedGun, static_cast<ModSlot>(ms));
+      if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload("SLOT")) {
+          const auto* src = static_cast<const SlotPayload*>(pl->Data);
+          if (src->container == kSelfContainer) a.net.attach(kSelfContainer, a.selectedGun, src->slot);
+        }
+        ImGui::EndDragDropTarget();
+      }
+      if (ImGui::IsItemHovered() && m != Item::None) ImGui::SetTooltip("%s\n%s\nClick to remove", itemDef(m).name, itemDef(m).description);
+      ImGui::PopID();
+      ImGui::EndGroup();
+    }
+    GunStats gs = gunStats(gun);
+    ImGui::TextColored(kMuted, "Damage %.0f   Recoil %.1f   Zoom %.1fx%s", gs.damage, gs.recoil, gs.zoom, gs.silenced ? "   Silenced" : "");
+    ImGui::End();
+  }
+
   // Open container (left).
   if (a.net.openContainer()) {
     const Slots& cs = a.net.containerSlots();
@@ -816,7 +919,7 @@ static void inventoryScreen(App& a) {
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - gridW * 1.5f - 16 * g_scale, io.DisplaySize.y * 0.5f - invH * 0.5f),
                             ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(gridW, invH), ImGuiCond_Always);
-    ImGui::Begin(a.net.openContainerType() == ObjType::LootBag ? "Loot Bag" : "Storage Box", nullptr, kPanel);
+    ImGui::Begin(objName(a.net.openContainerType()), nullptr, kPanel);
     slotGrid(a, a.net.openContainer(), cs, 0, static_cast<int>(cs.size()), cols);
     ImGui::Spacing();
     if (wideButton("Take all", 36 * g_scale))
@@ -860,12 +963,19 @@ static void pauseMenu(App& a) {
   ImGui::TextColored(kMuted, "Mouse sensitivity");
   ImGui::SetNextItemWidth(-1);
   ImGui::SliderFloat("##sens", &a.mouseSensitivity, 0.2f, 3.0f, "%.2f");
+  ImGui::TextColored(kMuted, "Volume");
+  ImGui::SetNextItemWidth(-1);
+  ImGui::SliderFloat("##vol", &a.volume, 0.0f, 1.0f, "%.2f");
   ImGui::Checkbox("Third-person camera (V)", &a.thirdPerson);
   ImGui::Spacing();
   ImGui::SeparatorText("Controls");
   ImGui::TextColored(kMuted,
                      "WASD move, Shift sprint, Space jump\n"
-                     "Left click: hit / gather / shoot / eat / build\n"
+                     "Left click: hit / gather / shoot / eat / build / plant explosives\n"
+                     "Right mouse: aim down sights   R: reload (or change building piece)\n"
+                     "Recoil kicks the same way every time: pull the mouse against it\n"
+                     "Click a gun in your inventory to add attachments\n"
+                     "Code lock in hand + click your door/box to lock it\n"
                      "1-6 or mouse wheel: hotbar    Tab: inventory & crafting\n"
                      "E: open doors, boxes, pick plants    R: change building piece\n"
                      "Hammer: hit your building to upgrade it\n"
@@ -873,6 +983,59 @@ static void pauseMenu(App& a) {
   ImGui::Spacing();
   if (wideButton("Leave server")) leaveServer(a);
   if (wideButton("Quit game")) a.quit = true;
+  ImGui::End();
+}
+
+// Keypad for code locks: choose a code (new lock) or type it to get in.
+static void codeKeypad(App& a) {
+  ImGuiIO& io = ImGui::GetIO();
+  ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, rgba(0, 0, 0, 0.35f));
+  centerNext(ImVec2(300 * g_scale, 0));
+  ImGui::Begin("##keypad", nullptr, kPanel | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize);
+  ImGui::PushFont(a.fontBig);
+  ImGui::TextUnformatted(a.codeMode == 0 ? "Set a code" : "Enter code");
+  ImGui::PopFont();
+  ImGui::TextColored(kMuted, a.codeMode == 0 ? "4 digits. Share it with friends." : "This is locked.");
+  // The display: digits so far, padded with dashes.
+  std::string shown = a.codeBuf;
+  while (shown.size() < 4) shown += '-';
+  ImGui::PushFont(a.fontBig);
+  float w = ImGui::CalcTextSize(shown.c_str()).x;
+  ImGui::SetCursorPosX((ImGui::GetWindowWidth() - w) * 0.5f);
+  ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "%s", shown.c_str());
+  ImGui::PopFont();
+  const float bw = 76 * g_scale, bh = 52 * g_scale;
+  const char* keys[] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "OK"};
+  size_t len = std::strlen(a.codeBuf);
+  for (int i = 0; i < 12; ++i) {
+    if (i % 3) ImGui::SameLine();
+    if (ImGui::Button(keys[i], ImVec2(bw, bh))) {
+      if (i == 9) a.codeBuf[0] = 0;
+      else if (i == 11) {
+        if (len == 4) {
+          a.net.enterCode(a.codeObject, a.codeBuf);
+          a.codeOpen = false;
+        }
+      } else if (len < 4) {
+        a.codeBuf[len] = keys[i][0];
+        a.codeBuf[len + 1] = 0;
+      }
+    }
+  }
+  // Number keys work too.
+  for (int k = 0; k <= 9; ++k)
+    if ((ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + k)) || ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_Keypad0 + k))) &&
+        std::strlen(a.codeBuf) < 4) {
+      size_t l = std::strlen(a.codeBuf);
+      a.codeBuf[l] = static_cast<char>('0' + k);
+      a.codeBuf[l + 1] = 0;
+    }
+  if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && std::strlen(a.codeBuf) > 0) a.codeBuf[std::strlen(a.codeBuf) - 1] = 0;
+  if ((ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) && std::strlen(a.codeBuf) == 4) {
+    a.net.enterCode(a.codeObject, a.codeBuf);
+    a.codeOpen = false;
+  }
+  if (wideButton("Cancel", 36 * g_scale)) a.codeOpen = false;
   ImGui::End();
 }
 
@@ -929,6 +1092,7 @@ void uiInGame(App& a) {
   if (a.chatOpen) chatBox(a);
   if (a.pauseOpen) pauseMenu(a);
   if (a.showPlayers) playerList(a);
+  if (a.codeOpen && !dead) codeKeypad(a);
 }
 
 }  // namespace sg

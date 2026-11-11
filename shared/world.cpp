@@ -73,6 +73,9 @@ const NodeInfo& nodeInfo(NodeType t) {
       {"Hemp", Item::Cloth, 0, 300, true, 10},
       {"Berry Bush", Item::Berries, 0, 300, true, 4},
       {"Mushroom", Item::Mushroom, 0, 300, true, 2},
+      {"Coal Rock", Item::Coal, 250, 900, false, 0},
+      {"High Quality Ore Rock", Item::HQMetalOre, 60, 1500, false, 0},
+      {"Scrap Pile", Item::Scrap, 0, 600, true, 12},
   };
   size_t i = static_cast<size_t>(t);
   return infos[i < sizeof(infos) / sizeof(infos[0]) ? i : 0];
@@ -96,6 +99,9 @@ std::optional<ResourceNode> nodeInCell(const Terrain& t, int gx, int gz) {
   else if (r < 0.109f) type = NodeType::Hemp;
   else if (r < 0.117f) type = NodeType::BerryBush;
   else if (r < 0.124f) type = NodeType::Mushroom;
+  else if (r < 0.131f) type = NodeType::Coal;
+  else if (r < 0.1335f) type = NodeType::HQMetal;
+  else if (r < 0.139f) type = NodeType::Scrap;
   else return std::nullopt;
 
   float x = (static_cast<float>(gx) + 0.15f + 0.7f * cellHash(gz, gx, seed + 1)) * kNodeCell;
@@ -108,7 +114,14 @@ std::optional<ResourceNode> nodeInCell(const Terrain& t, int gx, int gz) {
       break;
     case NodeType::MetalOre:
     case NodeType::Sulfur:
+    case NodeType::Coal:
       if (h < 6.0f) return std::nullopt;  // ore lives on the hills
+      break;
+    case NodeType::HQMetal:
+      if (h < 28.0f) return std::nullopt;  // rare, high up in the mountains
+      break;
+    case NodeType::Scrap:
+      if (h > 14.0f) return std::nullopt;  // junk washed up near the coast
       break;
     case NodeType::Hemp:
     case NodeType::BerryBush:
@@ -122,7 +135,8 @@ std::optional<ResourceNode> nodeInCell(const Terrain& t, int gx, int gz) {
   n.id = static_cast<uint32_t>(gz * kNodeCells + gx + 1);
   n.type = type;
   n.scale = 0.8f + 0.6f * cellHash(gx * 3, gz * 5, seed + 2);
-  bool rock = type == NodeType::Stone || type == NodeType::MetalOre || type == NodeType::Sulfur;
+  bool rock = type == NodeType::Stone || type == NodeType::MetalOre || type == NodeType::Sulfur ||
+              type == NodeType::Coal || type == NodeType::HQMetal;
   n.pos = {x, h - (rock ? 0.2f * n.scale : 0.0f), z};
   return n;
 }
@@ -149,7 +163,10 @@ AABB nodeBounds(const ResourceNode& n) {
     case NodeType::Tree: return box(0.3f * s, 0, 4.0f * s);
     case NodeType::Stone:
     case NodeType::MetalOre:
-    case NodeType::Sulfur: return box(0.9f * s, 0, 1.3f * s);
+    case NodeType::Sulfur:
+    case NodeType::Coal:
+    case NodeType::HQMetal: return box(0.9f * s, 0, 1.3f * s);
+    case NodeType::Scrap: return box(0.7f, 0, 0.7f);
     case NodeType::Hemp: return box(0.25f, 0, 1.4f);
     case NodeType::BerryBush: return box(0.6f, 0, 1.1f);
     case NodeType::Mushroom: return box(0.25f, 0, 0.4f);
@@ -170,6 +187,10 @@ const char* objName(ObjType t) {
     case ObjType::StorageBox: return "Storage Box";
     case ObjType::SleepingBag: return "Sleeping Bag";
     case ObjType::LootBag: return "Loot Bag";
+    case ObjType::LargeBox: return "Large Box";
+    case ObjType::Stash: return "Small Stash";
+    case ObjType::LandClaim: return "Land Claim Post";
+    case ObjType::Charge: return "Explosive";
     default: return "?";
   }
 }
@@ -199,7 +220,11 @@ float maxHp(ObjType t, Tier tier) {
     }
   }
   switch (t) {
-    case ObjType::Door: return 200;
+    case ObjType::Door: return tier == Tier::Metal ? 1000.0f : tier == Tier::Stone ? 500.0f : 200.0f;
+    case ObjType::LargeBox: return 300;
+    case ObjType::Stash: return 80;
+    case ObjType::LandClaim: return 500;
+    case ObjType::Charge: return 50;
     case ObjType::Workbench: return 300;
     case ObjType::StorageBox: return 150;
     case ObjType::SleepingBag: return 50;
@@ -227,13 +252,33 @@ ObjType deployableFor(Item item) {
     case Item::StorageBox: return ObjType::StorageBox;
     case Item::Workbench: return ObjType::Workbench;
     case Item::SleepingBag: return ObjType::SleepingBag;
+    case Item::SheetMetalDoor:
+    case Item::ArmoredDoor: return ObjType::Door;
+    case Item::LargeBox: return ObjType::LargeBox;
+    case Item::SmallStash: return ObjType::Stash;
+    case Item::LandClaim: return ObjType::LandClaim;
+    case Item::PipeBomb:
+    case Item::ExplosiveCharge: return ObjType::Charge;
     default: return ObjType::None;
   }
+}
+
+Tier doorTierFor(Item item) {
+  if (item == Item::ArmoredDoor) return Tier::Metal;
+  if (item == Item::SheetMetalDoor) return Tier::Stone;
+  return Tier::Wood;
+}
+
+bool isLockable(ObjType t) {
+  return t == ObjType::Door || t == ObjType::StorageBox || t == ObjType::LargeBox || t == ObjType::Stash ||
+         t == ObjType::LandClaim;
 }
 
 int containerSize(ObjType t) {
   if (t == ObjType::StorageBox) return 18;
   if (t == ObjType::LootBag) return kInventorySlots;
+  if (t == ObjType::LargeBox) return 36;
+  if (t == ObjType::Stash) return 6;
   return 0;
 }
 
@@ -323,6 +368,18 @@ void objectBoxes(const WorldObject& o, std::vector<ObjBox>& out, bool visual) {
       break;
     case ObjType::LootBag:
       out.push_back({centeredBox(p, 0.3f, 0.25f, 0.3f, 0), false});
+      break;
+    case ObjType::LargeBox:
+      out.push_back({centeredBox(p, 0.8f, 0.4f, 0.35f, o.rot), true});
+      break;
+    case ObjType::Stash:
+      out.push_back({centeredBox(p, 0.25f, 0.06f, 0.25f, o.rot), false});
+      break;
+    case ObjType::LandClaim:
+      out.push_back({centeredBox(p, 0.3f, 0.8f, 0.25f, o.rot), true});
+      break;
+    case ObjType::Charge:
+      out.push_back({{{p.x - 0.12f, p.y - 0.12f, p.z - 0.12f}, {p.x + 0.12f, p.y + 0.12f, p.z + 0.12f}}, false});
       break;
     default:
       break;
@@ -633,9 +690,14 @@ const char* checkPlacement(ObjType type, const Vec3& pos, uint8_t rot, const Ter
       if (findAt(world, {ObjType::Stairs}, pos, 0.1f)) return "Something is already here";
       return nullptr;
     }
+    case ObjType::Charge:
+      return nullptr;  // stuck to whatever it was aimed at; the server checks reach
     case ObjType::Workbench:
     case ObjType::StorageBox:
-    case ObjType::SleepingBag: {
+    case ObjType::SleepingBag:
+    case ObjType::LargeBox:
+    case ObjType::Stash:
+    case ObjType::LandClaim: {
       float g = world.groundHeight(terrain, pos.x, pos.z, 0.05f, pos.y + 0.25f, 0.0f);
       if (std::fabs(g - pos.y) > 0.25f) return "Needs flat ground";
       if (pos.y < 0.2f) return "Can't place in water";
@@ -780,9 +842,19 @@ Placement computePlacement(ObjType type, const Terrain& terrain, const World& wo
       p.pos = {cellCenter(i), nearestY(ys, P.y), cellCenter(j)};
       break;
     }
+    case ObjType::Charge:
+      if (!hit || dist > 3.5f) {
+        p.error = "Aim at a wall, door or the ground";
+        return p;
+      }
+      p.pos = P + hitN * 0.1f;
+      return p;
     case ObjType::Workbench:
     case ObjType::StorageBox:
     case ObjType::SleepingBag:
+    case ObjType::LargeBox:
+    case ObjType::Stash:
+    case ObjType::LandClaim:
       if (!hit || hitN.y < 0.7f) {
         p.error = "Aim at flat ground";
         return p;

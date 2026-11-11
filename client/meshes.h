@@ -74,6 +74,14 @@ class MeshBuilder {
 float noise3(float x, float y, float z);  // smooth value noise, 0..1
 
 void buildItemModel(Item item, MeshBuilder& mb);               // item space: origin at the grip, -Z forward
+
+// Where attachments sit on each gun (item space). Attachment models have their
+// origin at the mount: sights sit on top (+Y), muzzle devices extend along -Z, grips hang below.
+struct GunMounts {
+  Vec3 sight, muzzle, grip;
+};
+GunMounts gunMounts(Item gun);
+float sightEyeHeight(Item attachment);  // eye line above the sight mount when aiming through it
 // World space. detailed = close to the player: full leaves; far away: cheaper canopies.
 void buildNode(const ResourceNode& n, MeshBuilder& mb, bool detailed = true);
 void buildObject(const WorldObject& o, MeshBuilder& mb);       // world space

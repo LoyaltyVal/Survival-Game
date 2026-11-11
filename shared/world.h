@@ -31,7 +31,7 @@ bool rayAABB(const Vec3& o, const Vec3& d, const AABB& b, float maxDist, float& 
 std::optional<float> rayTerrain(const Terrain& terrain, const Vec3& o, const Vec3& d, float maxDist);
 
 // --- resource nodes -------------------------------------------------------------
-enum class NodeType : uint8_t { None, Tree, Stone, MetalOre, Sulfur, Hemp, BerryBush, Mushroom };
+enum class NodeType : uint8_t { None, Tree, Stone, MetalOre, Sulfur, Hemp, BerryBush, Mushroom, Coal, HQMetal, Scrap };
 
 struct ResourceNode {
   uint32_t id = 0;
@@ -60,10 +60,12 @@ AABB nodeBounds(const ResourceNode& n);
 
 // --- placed objects ---------------------------------------------------------------
 enum class ObjType : uint8_t {
-  None, Foundation, Wall, Doorway, Floor, Stairs, Door, Workbench, StorageBox, SleepingBag, LootBag, Count
+  None, Foundation, Wall, Doorway, Floor, Stairs, Door, Workbench, StorageBox, SleepingBag, LootBag,
+  LargeBox, Stash, LandClaim, Charge, Count
 };
 enum class Tier : uint8_t { Twig, Wood, Stone, Metal };
-enum ObjFlags : uint8_t { kDoorOpen = 1 };
+enum ObjFlags : uint8_t { kDoorOpen = 1, kLocked = 2 };  // kLocked: has a code lock
+constexpr float kClaimRadius = 25.0f;  // land claim post: building privilege radius
 
 constexpr float kGrid = 3.0f;        // building grid cell, metres
 constexpr float kWallHeight = 3.0f;
@@ -90,6 +92,8 @@ float maxHp(ObjType t, Tier tier);
 // Twig placement cost (tier Twig) or the cost to upgrade *to* `tier`.
 Ingredient buildCost(ObjType t, Tier tier);
 ObjType deployableFor(Item item);  // None if the item can't be placed
+Tier doorTierFor(Item item);       // wooden / sheet metal / armored doors
+bool isLockable(ObjType t);        // doors, boxes, claim posts
 int containerSize(ObjType t);      // 0 = not a container
 // The pieces the building plan cycles through.
 const std::vector<ObjType>& buildPlanPieces();

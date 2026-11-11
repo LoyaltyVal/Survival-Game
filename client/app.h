@@ -11,6 +11,7 @@
 #include "net_client.h"
 #include "renderer.h"
 #include "server.h"
+#include "sfx.h"
 #include "upnp.h"
 #include "world.h"
 
@@ -68,7 +69,8 @@ struct App {
     std::atomic<bool> running{false};
   };
   std::vector<std::unique_ptr<HostedServer>> hosted;
-  bool noUpnp = false;                  // --upnp off: don't touch the router
+  bool noUpnp = false;
+  bool noHost = false;                  // --host off: don't host the listed local worlds                  // --upnp off: don't touch the router
   PortForwarder forwarder;              // opens the hosted ports on the router for internet friends
   std::vector<std::string> lanAddresses;  // this PC's address on the home network
 
@@ -95,6 +97,40 @@ struct App {
   double swingStart = -10;
   double nextLocalUse = 0;
   double lastMuzzle = -10;
+
+  // guns
+  float aimT = 0;               // 0 hip .. 1 aiming down sights (smoothed)
+  float zoom = 1;               // current gun's sight magnification
+  bool scoped = false;          // looking through a 4x/8x scope (overlay, no view model)
+  bool holo = false;            // red dot sight
+  float spreadNow = 0;          // current cone, for the crosshair
+  float recoilYaw = 0, recoilPitch = 0;  // kick still to be applied to the view (radians)
+  int burstShots = 0;           // shot index in the current burst (drives the recoil pattern)
+  double lastShot = -10;
+  double reloadEnd = 0;         // local reload timer (the server does the real one)
+  int reloadInputs = 0;         // send the reload button for a few inputs
+  bool wantReload = false;
+  int predMag = 0, predSlot = -1;
+  uint32_t seenInvVersion = 0;
+  float shake = 0;              // camera shake from nearby explosions
+  struct Blast {
+    Vec3 pos;
+    double time;
+  };
+  std::vector<Blast> blasts;
+  int selectedGun = -1;         // inventory slot shown in the weapon/attachments panel
+
+  // code lock keypad
+  bool codeOpen = false;
+  uint32_t codeObject = 0;
+  uint8_t codeMode = 0;
+  char codeBuf[8] = "";
+  uint32_t lookAny = 0;         // any object under the crosshair (for code locks)
+
+  // audio
+  Audio audio;
+  float volume = 0.8f;
+  double stepPhase = 0;
 
   ImFont* fontBody = nullptr;
   ImFont* fontBig = nullptr;

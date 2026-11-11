@@ -150,7 +150,10 @@ void NetClient::onMessage(const std::vector<uint8_t>& msg, double now) {
   switch (static_cast<Msg>(raw)) {
     case Msg::Inventory: {
       Slots s;
-      if (readSlots(r, s) && s.size() == kInventorySlots) inventory_ = s;
+      if (readSlots(r, s) && s.size() == kInventorySlots) {
+        inventory_ = s;
+        ++inventoryVersion_;
+      }
       break;
     }
     case Msg::CraftQueue: {
@@ -231,12 +234,35 @@ void NetClient::onMessage(const std::vector<uint8_t>& msg, double now) {
       if (r.u8(f)) {
         lastHitTime_ = now;
         lastHitFlags_ = f;
+        sounds_.push_back({(f & 2) ? Sound::Kill : (f & 1) ? Sound::Headshot : Sound::Hitmarker, {}, false});
+      }
+      break;
+    }
+    case Msg::SoundAt: {
+      uint8_t snd;
+      Vec3 pos;
+      uint32_t source;
+      if (r.u8(snd) && r.vec3(pos) && r.u32(source) && snd < static_cast<uint8_t>(Sound::Count))
+        sounds_.push_back({static_cast<Sound>(snd), pos, true});
+      break;
+    }
+    case Msg::CodePrompt: {
+      uint32_t id;
+      uint8_t mode;
+      if (r.u32(id) && r.u8(mode)) {
+        codePromptObject_ = id;
+        codePromptMode_ = mode;
       }
       break;
     }
     case Msg::Gathered: {
       uint16_t item, count;
       if (r.u16(item) && r.u16(count) && validItem(item)) {
+        Item it = static_cast<Item>(item);
+        sounds_.push_back({it == Item::Wood ? Sound::HitWood
+                           : (it == Item::Cloth || it == Item::Berries || it == Item::Mushroom || it == Item::Scrap) ? Sound::Pickup
+                                                                                                                     : Sound::HitStone,
+                           {}, false});
         if (!gathered_.empty() && gathered_.back().item == static_cast<Item>(item) && now - gathered_.back().time < 2.0) {
           gathered_.back().count += count;  // merge quick repeats into one "+30 Wood"
           gathered_.back().time = now;
@@ -306,12 +332,46 @@ void NetClient::cancelCraft(int queueIndex) {
   sendReliable(w);
 }
 
-void NetClient::place(ObjType type, const Vec3& pos, uint8_t rot) {
+void NetClient::place(ObjType type, const Vec3& pos, uint8_t rot, Item item) {
   ByteWriter w;
   w.u8(static_cast<uint8_t>(Msg::Place));
   w.u8(static_cast<uint8_t>(type));
   w.vec3(pos);
   w.u8(rot);
+  w.u16(static_cast<uint16_t>(item));
+  sendReliable(w);
+}
+
+void NetClient::attach(uint32_t container, int gunSlot, int attachmentSlot) {
+  ByteWriter w;
+  w.u8(static_cast<uint8_t>(Msg::Attach));
+  w.u32(container);
+  w.u8(static_cast<uint8_t>(gunSlot));
+  w.u8(static_cast<uint8_t>(attachmentSlot));
+  sendReliable(w);
+}
+
+void NetClient::detach(uint32_t container, int gunSlot, ModSlot slot) {
+  ByteWriter w;
+  w.u8(static_cast<uint8_t>(Msg::Detach));
+  w.u32(container);
+  w.u8(static_cast<uint8_t>(gunSlot));
+  w.u8(static_cast<uint8_t>(slot));
+  sendReliable(w);
+}
+
+void NetClient::useOn(uint32_t objectId) {
+  ByteWriter w;
+  w.u8(static_cast<uint8_t>(Msg::UseOn));
+  w.u32(objectId);
+  sendReliable(w);
+}
+
+void NetClient::enterCode(uint32_t objectId, const std::string& code) {
+  ByteWriter w;
+  w.u8(static_cast<uint8_t>(Msg::Code));
+  w.u32(objectId);
+  w.str(code, 8);
   sendReliable(w);
 }
 

@@ -109,7 +109,7 @@ static void testSanitize() {
   auto s = sanitizeInput(in);
   CHECK(approxEq(std::sqrt(s.moveX * s.moveX + s.moveZ * s.moveZ), 1.0f));  // no diagonal boost
   CHECK(approxEq(s.pitch, kMaxPitch));
-  CHECK(s.buttons == (kButtonJump | kButtonSprint | kButtonPrimary));
+  CHECK(s.buttons == (kButtonJump | kButtonSprint | kButtonPrimary | kButtonReload | kButtonAim));
   CHECK(s.slot < kHotbarSlots);
 }
 
@@ -188,9 +188,12 @@ static void testTerrainAndNodes() {
   nodesInRect(t, 1000, 1000, 3000, 3000, a);
   nodesInRect(u, 1000, 1000, 3000, 3000, b);
   CHECK(!a.empty() && a.size() == b.size());
-  int counts[8] = {};
+  int counts[16] = {};
   for (const auto& n : a) counts[static_cast<int>(n.type)]++;
-  for (int k = 1; k < 8; ++k) CHECK(counts[k] > 0);
+  for (int k = 1; k <= static_cast<int>(NodeType::Scrap); ++k) {
+    if (counts[k] == 0) std::printf("  no nodes of type %d in the test area\n", k);
+    CHECK(counts[k] > 0);
+  }
   auto byId = nodeById(t, a[a.size() / 2].id);
   CHECK(byId && byId->type == a[a.size() / 2].type && approxEq(byId->pos.x, a[a.size() / 2].pos.x));
 }
@@ -442,7 +445,7 @@ static void testGameplayLoop() {
   Placement p = computePlacement(ObjType::Foundation, client.terrain(), client.world(), e2, aim, 0);
   if (p.error) std::printf("  placement error: %s\n", p.error);
   CHECK(p.error == nullptr);
-  client.place(p.type, p.pos, p.rot);
+  client.place(p.type, p.pos, p.rot, Item::BuildingPlan);
   pump(server, client, now, 10);
   CHECK(server.world().objects().size() == 1);
   CHECK(client.world().objects().size() == 1);  // the client heard about it
@@ -505,7 +508,7 @@ static void testSaveAndReload() {
     pump(server, client, now, 3);
     Placement p = computePlacement(ObjType::Foundation, client.terrain(), client.world(), e, normalize(Vec3{0, -0.4f, -1}), 0);
     if (p.error) std::printf("  placement error: %s\n", p.error);
-    client.place(p.type, p.pos, p.rot);
+    client.place(p.type, p.pos, p.rot, Item::BuildingPlan);
     pump(server, client, now, 10);
     CHECK(server.world().objects().size() == 1);
     client.disconnect();
@@ -603,6 +606,184 @@ static void testRanksAndCommands() {
   server.stop();
 }
 
+static int findSlot(const Slots& s, Item item) {
+  for (int i = 0; i < static_cast<int>(s.size()); ++i)
+    if (s[i].item == item) return i;
+  return -1;
+}
+
+// Guns, attachments, code locks, land claims and explosives, with two real clients.
+static void testWeaponsLocksAndRaiding() {
+  ServerConfig cfg;
+  cfg.port = 27906;
+  Server server(cfg);
+  CHECK(server.start());
+  double now = 0;
+  NetClient owner, guest;
+  CHECK(join(server, owner, cfg.port, "Raider", now));
+  CHECK(join(server, guest, cfg.port, "Neighbor", now));
+  PlayerInput oin{}, gin{};
+  auto pumpBoth = [&](int ticks) {
+    for (int t = 0; t < ticks; ++t) {
+      for (int k = 0; k < 2; ++k) {
+        owner.sendInput(oin);
+        guest.sendInput(gin);
+      }
+      server.tick(1.0 / 30);
+      now += 1.0 / 30;
+      owner.update(now);
+      guest.update(now);
+    }
+  };
+  pumpBoth(5);
+  const uint32_t me = owner.playerId(), them = guest.playerId();
+
+  // Put both on flat ground near the island centre, 4 m apart, guest in front (-Z) of owner.
+  Terrain t(cfg.terrainSeed);
+  Vec3 spot{2100, 0, 2100};
+  for (float x = 2000; x < 2400; x += 3)
+    if (t.heightAt(x, 2100) > 3 && t.normalAt(x, 2100).y > 0.98f && t.normalAt(x, 2096).y > 0.98f) {
+      spot = {x, t.heightAt(x, 2100), 2100};
+      break;
+    }
+  *server.debugState(me) = PlayerState{};
+  server.debugState(me)->pos = spot;
+  server.debugState(them)->pos = {spot.x, t.heightAt(spot.x, spot.z - 4), spot.z - 4};
+  server.debugState(them)->vel = {};
+  pumpBoth(5);
+
+  // --- automatic rifle: reload, then hold the trigger ---
+  Slots* inv = server.debugInventory(me);
+  (*inv)[2] = {Item::AssaultRifle, 1};
+  addItem(*inv, Item::RifleAmmo, 60);
+  addItem(*inv, Item::Silencer, 1);
+  pumpBoth(3);
+  oin = {0, 0, 0, 0, 0, kButtonReload, 2};
+  pumpBoth(2);
+  oin.buttons = 0;
+  pumpBoth(100);  // 3.3 s: reload done
+  CHECK(owner.inventory()[2].data == 30);
+  CHECK(countItem(owner.inventory(), Item::RifleAmmo) == 30);
+  oin = {0, 0, 0, 0, 0.6f, kButtonPrimary, 2};  // aim up into the sky, hold the trigger
+  pumpBoth(15);                                 // 0.5 s
+  oin.buttons = 0;
+  pumpBoth(3);
+  int left = owner.inventory()[2].data;
+  std::printf("  assault rifle fired %d rounds in 0.5 s\n", 30 - left);
+  CHECK(left <= 27 && left >= 23);  // automatic: ~4-5 shots
+
+  // --- attachments ---
+  int sil = findSlot(owner.inventory(), Item::Silencer);
+  owner.attach(kSelfContainer, 2, sil);
+  pumpBoth(5);
+  CHECK(modAt(owner.inventory()[2], ModSlot::Muzzle) == Item::Silencer);
+  CHECK(countItem(owner.inventory(), Item::Silencer) == 0);
+  CHECK(gunStats(owner.inventory()[2]).silenced);
+  owner.detach(kSelfContainer, 2, ModSlot::Muzzle);
+  pumpBoth(5);
+  CHECK(modAt(owner.inventory()[2], ModSlot::Muzzle) == Item::None && countItem(owner.inventory(), Item::Silencer) == 1);
+  CHECK(!modFits(Item::Pistol, Item::Scope8x) && modFits(Item::Sniper, Item::Scope8x));
+
+  // --- semi-auto pistol: holding the trigger fires once ---
+  inv = server.debugInventory(me);
+  (*inv)[3] = {Item::Pistol, 1, 12, 0};
+  pumpBoth(3);
+  oin = {0, 0, 0, 0, 0.6f, kButtonPrimary, 3};
+  pumpBoth(30);
+  oin.buttons = 0;
+  pumpBoth(3);
+  CHECK(owner.inventory()[3].data == 11);
+
+  // --- shotgun to the chest at 4 m ---
+  inv = server.debugInventory(me);
+  (*inv)[4] = {Item::Shotgun, 1, 6, 0};
+  pumpBoth(3);
+  Vec3 eye = server.debugState(me)->pos + Vec3{0, kEyeHeight, 0};
+  Vec3 target = server.debugState(them)->pos + Vec3{0, 1.1f, 0};
+  float pitch = std::atan2(target.y - eye.y, std::hypot(target.x - eye.x, target.z - eye.z));
+  float yaw = std::atan2(-(target.x - eye.x), -(target.z - eye.z));
+  oin = {0, 0, 0, yaw, pitch, kButtonPrimary, 4};
+  pumpBoth(1);
+  oin.buttons = 0;
+  pumpBoth(5);
+  std::printf("  shotgun at 4 m: target health %.0f\n", guest.vitals().health);
+  CHECK(guest.vitals().health < 50 || guest.vitals().dead);
+  *server.debugVitals(them) = Vitals{};
+
+  // --- code lock on a storage box ---
+  inv = server.debugInventory(me);
+  addItem(*inv, Item::StorageBox, 1);
+  addItem(*inv, Item::CodeLock, 1);
+  addItem(*inv, Item::LandClaim, 1);
+  pumpBoth(3);
+  Vec3 e2 = owner.predicted().pos + Vec3{0, kEyeHeight, 0};
+  Placement boxPl = computePlacement(ObjType::StorageBox, owner.terrain(), owner.world(), e2, normalize(Vec3{0.7f, -0.6f, 0}), 0);
+  if (boxPl.error) std::printf("  box placement: %s\n", boxPl.error);
+  owner.place(boxPl.type, boxPl.pos, boxPl.rot, Item::StorageBox);
+  pumpBoth(5);
+  uint32_t boxId = 0;
+  for (const auto& [id, o] : server.world().objects())
+    if (o.type == ObjType::StorageBox) boxId = id;
+  CHECK(boxId != 0);
+  owner.useOn(boxId);
+  pumpBoth(5);
+  uint32_t promptId = 0;
+  uint8_t mode = 9;
+  CHECK(owner.takeCodePrompt(promptId, mode) && promptId == boxId && mode == 0);  // asked to choose a code
+  owner.enterCode(boxId, "4821");
+  pumpBoth(5);
+  CHECK(owner.world().find(boxId) && (owner.world().find(boxId)->flags & kLocked));
+  // The guest walks up and tries it.
+  server.debugState(them)->pos = server.debugState(me)->pos + Vec3{0.5f, 0, 0.5f};
+  pumpBoth(3);
+  guest.interactObject(boxId);
+  pumpBoth(5);
+  CHECK(guest.takeCodePrompt(promptId, mode) && mode == 1);  // locked: asked for the code
+  CHECK(guest.openContainer() == 0);
+  guest.enterCode(boxId, "0000");
+  pumpBoth(5);
+  CHECK(guest.openContainer() == 0);  // wrong code
+  pumpBoth(35);                       // wait out the guess delay
+  guest.enterCode(boxId, "4821");
+  pumpBoth(5);
+  CHECK(guest.openContainer() == boxId);  // right code: in
+
+  // --- land claim: the guest can't build next to the owner's base ---
+  e2 = owner.predicted().pos + Vec3{0, kEyeHeight, 0};
+  Placement claim = computePlacement(ObjType::LandClaim, owner.terrain(), owner.world(), e2, normalize(Vec3{-0.7f, -0.6f, 0}), 0);
+  owner.place(claim.type, claim.pos, claim.rot, Item::LandClaim);
+  pumpBoth(5);
+  size_t before = server.world().objects().size();
+  addItem(*server.debugInventory(them), Item::BuildingPlan, 1);
+  addItem(*server.debugInventory(them), Item::Wood, 200);
+  pumpBoth(3);
+  Vec3 ge = guest.predicted().pos + Vec3{0, kEyeHeight, 0};
+  Placement f = computePlacement(ObjType::Foundation, guest.terrain(), guest.world(), ge, normalize(Vec3{0, -0.45f, 1}), 0);
+  guest.place(f.type, f.pos, f.rot, Item::BuildingPlan);
+  pumpBoth(5);
+  CHECK(server.world().objects().size() == before);
+  CHECK(hasNotice(guest, "Building blocked"));
+
+  // --- raid: an explosive charge destroys the box ---
+  server.debugState(them)->pos = server.debugState(me)->pos + Vec3{40, 0, 0};  // out of the blast
+  server.debugState(them)->pos.y = t.heightAt(server.debugState(them)->pos.x, server.debugState(them)->pos.z);
+  addItem(*server.debugInventory(me), Item::ExplosiveCharge, 1);
+  *server.debugVitals(me) = Vitals{};
+  pumpBoth(3);
+  const WorldObject* box = server.world().find(boxId);
+  CHECK(box != nullptr);
+  if (box) owner.place(ObjType::Charge, box->pos + Vec3{0, 0.75f, 0}, 0, Item::ExplosiveCharge);
+  pumpBoth(5);
+  bool planted = false;
+  for (const auto& [id, o] : server.world().objects()) planted = planted || o.type == ObjType::Charge;
+  CHECK(planted);
+  CHECK(server.world().find(boxId) != nullptr);  // still standing during the fuse
+  pumpBoth(30 * 11);                             // 11 s
+  CHECK(server.world().find(boxId) == nullptr);  // boom
+  CHECK(owner.vitals().health < 100);            // standing next to it hurt
+  server.stop();
+}
+
 // A cheater sending inputs 4x too fast must not move faster than allowed.
 static void testSpeedHackIsCapped() {
   ServerConfig cfg;
@@ -647,22 +828,41 @@ static void testSpeedHackIsCapped() {
 }
 
 int main() {
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
   if (!netInit()) return 1;
+  std::printf("[%s]\n", "testProtocolRoundTrip");
   testProtocolRoundTrip();
+  std::printf("[%s]\n", "testProtocolRejectsGarbage");
   testProtocolRejectsGarbage();
+  std::printf("[%s]\n", "testSanitize");
   testSanitize();
+  std::printf("[%s]\n", "testMovement");
   testMovement();
+  std::printf("[%s]\n", "testStamina");
   testStamina();
+  std::printf("[%s]\n", "testTerrainAndNodes");
   testTerrainAndNodes();
+  std::printf("[%s]\n", "testCameraMath");
   testCameraMath();
+  std::printf("[%s]\n", "testInventory");
   testInventory();
+  std::printf("[%s]\n", "testRecipes");
   testRecipes();
+  std::printf("[%s]\n", "testBuildingRules");
   testBuildingRules();
+  std::printf("[%s]\n", "testReliableChannel");
   testReliableChannel();
+  std::printf("[%s]\n", "testServerAndClient");
   testServerAndClient();
+  std::printf("[%s]\n", "testGameplayLoop");
   testGameplayLoop();
+  std::printf("[%s]\n", "testSaveAndReload");
   testSaveAndReload();
+  std::printf("[%s]\n", "testRanksAndCommands");
   testRanksAndCommands();
+  std::printf("[%s]\n", "testWeaponsLocksAndRaiding");
+  testWeaponsLocksAndRaiding();
+  std::printf("[%s]\n", "testSpeedHackIsCapped");
   testSpeedHackIsCapped();
   netShutdown();
   std::printf("%d checks, %d failures\n", g_checks, g_failures);

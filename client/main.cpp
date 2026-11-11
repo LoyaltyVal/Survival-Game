@@ -52,12 +52,13 @@ void loadSettings(App& a) {
     std::string key = line.substr(0, eq), value = line.substr(eq + 1);
     if (key == "name" && !value.empty()) std::snprintf(a.playerName, sizeof(a.playerName), "%s", value.c_str());
     else if (key == "sensitivity") a.mouseSensitivity = clampf(std::strtof(value.c_str(), nullptr), 0.2f, 3.0f);
+    else if (key == "volume") a.volume = clampf(std::strtof(value.c_str(), nullptr), 0.0f, 1.0f);
   }
 }
 
 void saveSettings(const App& a) {
   std::ofstream f("settings.txt");
-  f << "name=" << a.playerName << "\nsensitivity=" << a.mouseSensitivity << "\n";
+  f << "name=" << a.playerName << "\nsensitivity=" << a.mouseSensitivity << "\nvolume=" << a.volume << "\n";
 }
 
 void loadServers(App& a) {
@@ -266,6 +267,8 @@ int main(int argc, char** argv) {
       auto colon = hp.find(':');
       directHost = hp.substr(0, colon);
       if (colon != std::string::npos) directPort = static_cast<uint16_t>(std::atoi(hp.substr(colon + 1).c_str()));
+    } else if (!std::strcmp(argv[i], "--host")) {
+      a.noHost = !std::strcmp(argv[i + 1], "off");
     } else if (!std::strcmp(argv[i], "--upnp")) {
       a.noUpnp = !std::strcmp(argv[i + 1], "off");
     } else if (!std::strcmp(argv[i], "--name")) {
@@ -304,7 +307,9 @@ int main(int argc, char** argv) {
 
   if (!a.renderer.init()) return 1;
   a.browserSocket.open(0);
-  hostLocalServers(a);
+  a.audio.init("sounds");  // creates sounds/*.wav on first run; replace any of them with your own
+  a.audio.setVolume(a.volume);
+  if (!a.noHost) hostLocalServers(a);
 
   if (!directHost.empty()) {
     ServerEntry e;
@@ -398,7 +403,8 @@ int main(int argc, char** argv) {
       const bool dead = a.net.vitals().dead;
       const bool typing = io.WantTextInput;
       if (pEsc) {
-        if (a.chatOpen) a.chatOpen = false;
+        if (a.codeOpen) a.codeOpen = false;
+        else if (a.chatOpen) a.chatOpen = false;
         else if (a.showPlayers) a.showPlayers = false;
         else if (a.inventoryOpen) {
           a.inventoryOpen = false;
@@ -423,16 +429,32 @@ int main(int argc, char** argv) {
           a.chatJustOpened = true;
         }
       }
-      const bool uiOpen = a.inventoryOpen || a.pauseOpen || a.chatOpen || a.showPlayers || dead;
+      uint32_t promptObj;
+      uint8_t promptMode;
+      if (a.net.takeCodePrompt(promptObj, promptMode)) {  // a lock wants a code
+        a.codeOpen = true;
+        a.codeObject = promptObj;
+        a.codeMode = promptMode;
+        a.codeBuf[0] = 0;
+      }
+      const bool uiOpen = a.inventoryOpen || a.pauseOpen || a.chatOpen || a.showPlayers || a.codeOpen || dead;
       captured = !uiOpen && glfwGetWindowAttrib(a.window, GLFW_FOCUSED);
 
       if (captured) {
+        const int before = a.hotbar;
         for (int i = 0; i < kHotbarSlots; ++i)
           if (pNum[i]) a.hotbar = i;
         if (scroll > 0) a.hotbar = (a.hotbar + kHotbarSlots - 1) % kHotbarSlots;
         if (scroll < 0) a.hotbar = (a.hotbar + 1) % kHotbarSlots;
+        if (a.hotbar != before) {  // switching weapons cancels a reload and resets the recoil pattern
+          a.reloadEnd = 0;
+          a.burstShots = 0;
+        }
         if (pV) a.thirdPerson = !a.thirdPerson;
-        if (pR) a.buildPiece = (a.buildPiece + 1) % static_cast<int>(buildPlanPieces().size());
+        if (pR) {
+          if (itemDef(a.heldItem()).kind == ItemKind::Gun) a.wantReload = true;
+          else a.buildPiece = (a.buildPiece + 1) % static_cast<int>(buildPlanPieces().size());
+        }
         if (pE) {
           if (a.lookObject) a.net.interactObject(a.lookObject);
           else if (a.lookNode) a.net.interactNode(a.lookNode);
@@ -444,7 +466,8 @@ int main(int argc, char** argv) {
     double mx, my;
     glfwGetCursorPos(a.window, &mx, &my);
     if (captured && haveCursor) {
-      const float sens = kBaseSensitivity * a.mouseSensitivity;
+      // Slower mouse when zoomed in, so aiming through a scope feels the same as at the hip.
+      const float sens = kBaseSensitivity * a.mouseSensitivity / lerpf(1.0f, a.zoom, a.aimT);
       a.yaw -= static_cast<float>(mx - lastX) * sens;
       a.pitch = clampf(a.pitch - static_cast<float>(my - lastY) * sens, -kMaxPitch, kMaxPitch);
     }
@@ -455,11 +478,88 @@ int main(int argc, char** argv) {
     // --- gameplay (fixed 60 Hz input) ----------------------------------------------------------
     Vec3 feet;
     Item held = Item::None;
+    ItemStack heldStack;
+    static std::mt19937 fx(12345);
+    std::uniform_real_distribution<float> rnd(0.0f, 1.0f);
     if (a.screen == Screen::InGame) {
       const bool dead = a.net.vitals().dead;
-      held = dead ? Item::None : a.heldItem();
+      if (!dead) heldStack = a.net.inventory()[static_cast<size_t>(a.hotbar)];
+      held = heldStack.empty() ? Item::None : heldStack.item;
       const ItemDef& hd = itemDef(held);
-      const bool placing = hd.kind == ItemKind::Builder || hd.kind == ItemKind::Deployable;
+      const bool isGun = hd.kind == ItemKind::Gun;
+      const bool placing = hd.kind == ItemKind::Builder || hd.kind == ItemKind::Deployable || hd.kind == ItemKind::Explosive;
+      const GunStats gs = isGun ? gunStats(heldStack) : GunStats{};
+      const int reserve = isGun ? countItem(a.net.inventory(), hd.ammo) : 0;
+
+      // Our own idea of the magazine, so firing feels instant; the server's count wins when it arrives.
+      if (a.net.inventoryVersion() != a.seenInvVersion || a.hotbar != a.predSlot) {
+        if (!(isGun && now < a.reloadEnd)) a.predMag = heldStack.data;
+        a.seenInvVersion = a.net.inventoryVersion();
+        a.predSlot = a.hotbar;
+      }
+      bool reloading = now < a.reloadEnd;
+      if (a.reloadEnd > 0 && !reloading) {  // our reload finished
+        a.reloadEnd = 0;
+        a.predMag = std::min<int>(hd.magSize, a.predMag + reserve);
+      }
+      auto beginReload = [&] {
+        if (!isGun || reloading || a.predMag >= hd.magSize || reserve == 0) return;
+        a.reloadEnd = now + hd.reloadTime;
+        a.reloadInputs = 4;
+        reloading = true;
+        a.audio.play(Sound::Reload, nullptr, 0.8f, clampf(2.0f / hd.reloadTime, 0.6f, 1.3f));
+      };
+      if (a.wantReload) {
+        beginReload();
+        a.wantReload = false;
+      }
+
+      // Aiming down sights.
+      const bool rmb = glfwGetMouseButton(a.window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+      const bool aiming = captured && rmb && isGun && !reloading && !dead;
+      a.aimT = clampf(a.aimT + (aiming ? 1.0f : -1.0f) * static_cast<float>(frameDt) * 7.0f, 0.0f, 1.0f);
+      a.zoom = isGun ? gs.zoom : 1.0f;
+      a.scoped = isGun && gs.scoped && a.aimT > 0.92f;
+      a.holo = isGun && gs.holo && a.aimT > 0.85f;
+      a.spreadNow = isGun ? lerpf(gs.spread, gs.adsSpread, a.aimT) : 0.0f;
+
+      // Firing: predicted locally for instant feedback (sound, flash, recoil); the server decides hits.
+      if (now - a.lastShot > std::fmax(0.3, hd.useTime * 1.8)) a.burstShots = 0;
+      if (isGun && captured && lmbDown && !dead && now >= a.nextLocalUse && !reloading && (hd.automatic || lmbPressed)) {
+        if (a.predMag > 0) {
+          --a.predMag;
+          a.nextLocalUse = now + hd.useTime;
+          a.lastShot = now;
+          a.swingStart = now;
+          if (!gs.silenced && held != Item::Bow) a.lastMuzzle = now;
+          a.audio.play(gs.silenced ? Sound::Silenced : hd.sound, nullptr, 1.0f, 0.97f + 0.06f * rnd(fx));
+          // The recoil pattern: same kick every time for the Nth shot, plus a little noise.
+          float ky, kp;
+          recoilKick(held, a.burstShots++, ky, kp);
+          float scale = (hd.recoil > 0 ? gs.recoil / hd.recoil : 1.0f) * (aiming ? 0.8f : 1.0f);
+          ky += (rnd(fx) - 0.5f) * 0.2f * kp;
+          kp *= 0.9f + 0.2f * rnd(fx);
+          a.recoilYaw += ky * scale * kPi / 180.0f;
+          a.recoilPitch += kp * scale * kPi / 180.0f;
+        } else if (lmbPressed) {
+          if (reserve > 0) beginReload();
+          else a.audio.play(Sound::DryFire, nullptr, 0.8f);
+        }
+      }
+      // Melee / eating animation, timed like the server's cooldown.
+      if (!isGun && captured && lmbDown && !placing && hd.kind != ItemKind::Lock && now >= a.nextLocalUse && !dead) {
+        a.swingStart = now;
+        a.nextLocalUse = now + hd.useTime;
+        if (hd.kind == ItemKind::Tool) a.audio.play(Sound::Swing, nullptr, 0.5f, 0.9f + 0.2f * rnd(fx));
+      }
+      // Recoil moves your real aim (that's what you learn to pull against), spread over ~60 ms.
+      {
+        float take = clampf(static_cast<float>(frameDt) / 0.06f, 0.0f, 1.0f);
+        a.yaw += a.recoilYaw * take;
+        a.pitch = clampf(a.pitch + a.recoilPitch * take, -kMaxPitch, kMaxPitch);
+        a.recoilYaw -= a.recoilYaw * take;
+        a.recoilPitch -= a.recoilPitch * take;
+      }
 
       accumulator += frameDt;
       while (accumulator >= kInputDt) {
@@ -471,7 +571,12 @@ int main(int argc, char** argv) {
                                         (glfwGetKey(a.window, GLFW_KEY_A) == GLFW_PRESS));
           if (glfwGetKey(a.window, GLFW_KEY_SPACE) == GLFW_PRESS) in.buttons |= kButtonJump;
           if (glfwGetKey(a.window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) in.buttons |= kButtonSprint;
-          if (lmbDown && !placing) in.buttons |= kButtonPrimary;
+          if (lmbDown && !placing && hd.kind != ItemKind::Lock) in.buttons |= kButtonPrimary;
+          if (aiming) in.buttons |= kButtonAim;
+        }
+        if (a.reloadInputs > 0) {
+          in.buttons |= kButtonReload;
+          --a.reloadInputs;
         }
         in.yaw = a.yaw;
         in.pitch = a.pitch;
@@ -484,21 +589,11 @@ int main(int argc, char** argv) {
       float alpha = static_cast<float>(accumulator / kInputDt);
       feet = lerp(prevState.pos, currState.pos, alpha);
 
-      // Local attack animation, timed like the server's cooldown.
-      if (captured && lmbDown && !placing && now >= a.nextLocalUse && !dead) {
-        bool canFire = hd.kind != ItemKind::Gun || countItem(a.net.inventory(), hd.ammo) > 0;
-        if (canFire) {
-          a.swingStart = now;
-          a.nextLocalUse = now + hd.useTime;
-          if (hd.kind == ItemKind::Gun) a.lastMuzzle = now;
-        }
-      }
-
-      // What are we looking at? (E prompts, building preview)
+      // What are we looking at? (E prompts, code locks, building preview)
       const Vec3 eye = feet + Vec3{0, kEyeHeight, 0};
       const Vec3 dir = directionFromYawPitch(a.yaw, a.pitch);
       a.prompt.clear();
-      a.lookObject = a.lookNode = 0;
+      a.lookObject = a.lookNode = a.lookAny = 0;
       a.havePlacement = false;
       if (!dead) {
         float best = 3.5f;
@@ -506,12 +601,17 @@ int main(int argc, char** argv) {
           if (const WorldObject* o = a.net.world().find(h->objectId)) {
             best = h->dist;
             a.lookObject = o->id;
+            a.lookAny = o->id;
+            const bool locked = o->flags & kLocked;
+            const char* lockNote = locked ? "  [code lock]" : "";
             switch (o->type) {
-              case ObjType::Door:
-                a.prompt = o->owner == a.net.playerId() ? (o->flags & kDoorOpen ? "E  Close door" : "E  Open door") : "Locked door";
-                break;
-              case ObjType::StorageBox: a.prompt = "E  Open storage box"; break;
+              case ObjType::Door: a.prompt = std::string(o->flags & kDoorOpen ? "E  Close door" : "E  Open door") + lockNote; break;
+              case ObjType::StorageBox: a.prompt = std::string("E  Open storage box") + lockNote; break;
+              case ObjType::LargeBox: a.prompt = std::string("E  Open large box") + lockNote; break;
+              case ObjType::Stash: a.prompt = std::string("E  Open stash") + lockNote; break;
+              case ObjType::LandClaim: a.prompt = std::string("E  Authorize / deauthorize (25 m building rights)") + lockNote; break;
               case ObjType::LootBag: a.prompt = "E  Open loot bag"; break;
+              case ObjType::Charge: a.prompt = "Explosive! Run!"; a.lookObject = 0; break;
               case ObjType::SleepingBag: a.prompt = o->owner == a.net.playerId() ? "Your sleeping bag" : "Sleeping bag"; break;
               default: {
                 char buf[96];
@@ -521,6 +621,11 @@ int main(int argc, char** argv) {
                 a.lookObject = 0;  // nothing to press E on
                 break;
               }
+            }
+            if (hd.kind == ItemKind::Lock && isLockable(o->type)) {
+              if (locked) a.prompt = "Already has a lock";
+              else if (o->owner != a.net.playerId()) a.prompt = "You can only lock your own things";
+              else a.prompt = "Click  Put the code lock on";
             }
           }
         }
@@ -532,25 +637,38 @@ int main(int argc, char** argv) {
           if (!rayAABB(eye, dir, nodeBounds(n), best, t)) continue;
           best = t;
           const NodeInfo& info = nodeInfo(n.type);
-          a.lookObject = 0;
+          a.lookObject = a.lookAny = 0;
           if (info.pickup) {
             a.lookNode = n.id;
-            a.prompt = std::string("E  Pick ") + info.name;
+            a.prompt = std::string("E  Pick up ") + info.name;
           } else {
             a.prompt = info.name;
           }
         }
-        // Building plan / deployable preview.
+        if (hd.kind == ItemKind::Lock && captured && lmbPressed && a.lookAny) a.net.useOn(a.lookAny);
+        // Building plan / deployable / explosive preview.
         if (placing) {
           ObjType type = hd.kind == ItemKind::Builder ? buildPlanPieces()[static_cast<size_t>(a.buildPiece)] : deployableFor(held);
           a.placement = computePlacement(type, a.net.terrain(), a.net.world(), eye, dir, a.yaw);
           a.havePlacement = true;
-          if (captured && lmbPressed) {
-            if (!a.placement.error) {
-              a.net.place(a.placement.type, a.placement.pos, a.placement.rot);
-              a.swingStart = now;
-            }
+          if (captured && lmbPressed && !a.placement.error) {
+            a.net.place(a.placement.type, a.placement.pos, a.placement.rot, held);
+            a.swingStart = now;
           }
+        }
+      }
+
+      // Sounds the server sent (other players' shots, hits, doors, explosions).
+      for (const auto& ev : a.net.takeSounds()) {
+        if (!ev.positional) {
+          a.audio.play(ev.sound, nullptr, 0.7f);
+          continue;
+        }
+        a.audio.play(ev.sound, &ev.pos, 1.0f, 0.95f + 0.1f * rnd(fx));
+        if (ev.sound == Sound::Explosion) {
+          a.blasts.push_back({ev.pos, now});
+          float dist = length(ev.pos - feet);
+          a.shake = std::fmax(a.shake, clampf(1.0f - dist / 45.0f, 0.0f, 1.0f));
         }
       }
     }
@@ -565,6 +683,13 @@ int main(int argc, char** argv) {
       cam.pitch = a.pitch;
       cam.eye = feet + Vec3{0, kEyeHeight, 0};
       if (a.thirdPerson) cam.eye = cam.eye - directionFromYawPitch(cam.yaw, cam.pitch) * 4.0f + Vec3{0, 0.5f, 0};
+      cam.fovY = 70.0f * kPi / 180.0f / lerpf(1.0f, a.zoom, a.aimT);
+      if (a.shake > 0) {  // explosions rattle the camera
+        cam.yaw += (rnd(fx) - 0.5f) * 0.03f * a.shake;
+        cam.pitch += (rnd(fx) - 0.5f) * 0.03f * a.shake;
+        a.shake = std::fmax(0.0f, a.shake - static_cast<float>(frameDt) * 1.5f);
+      }
+      a.audio.setListener(cam.eye, directionFromYawPitch(cam.yaw, cam.pitch));
       a.renderer.beginFrame(cam, static_cast<float>(now), a.net.timeOfDay());
       a.renderer.drawWorld(a.net.terrain(), feet, a.net.depletedNodes(), a.net.nodesVersion());
       a.renderer.drawObjects(a.net.world());
@@ -575,7 +700,17 @@ int main(int argc, char** argv) {
         float dist = std::sqrt(d.x * d.x + d.z * d.z);
         if (dist > 2.0f) dist = 0;  // teleport / respawn
         w.last = pos;
+        float before = w.phase;
         w.phase += dist * 2.4f;
+        // A footstep each half stride (every ~1.3 m).
+        if (std::floor(before / kPi) != std::floor(w.phase / kPi) && dist > 0) {
+          if (id == a.net.playerId()) {
+            if (a.net.predicted().onGround) a.audio.play(Sound::Footstep, nullptr, 0.35f, 0.85f + 0.3f * rnd(fx));
+          } else if (length(pos - feet) < 35.0f) {
+            Vec3 at = pos;
+            a.audio.play(Sound::Footstep, &at, 0.6f, 0.85f + 0.3f * rnd(fx));
+          }
+        }
         float speed = frameDt > 0 ? dist / static_cast<float>(frameDt) : 0;
         w.amount = lerpf(w.amount, clampf(speed / kSprintSpeed, 0, 1), clampf(static_cast<float>(frameDt) * 10, 0, 1));
         return w;
@@ -602,6 +737,15 @@ int main(int argc, char** argv) {
         look.walkAmount = self.amount;
         a.renderer.drawPlayer(feet, a.yaw, a.pitch, look);
       }
+      for (auto it = a.blasts.begin(); it != a.blasts.end();) {
+        float age = static_cast<float>(now - it->time);
+        if (age > 4.5f) {
+          it = a.blasts.erase(it);
+          continue;
+        }
+        a.renderer.drawExplosion(it->pos, age);
+        ++it;
+      }
       if (a.havePlacement) {
         WorldObject ghost;
         ghost.type = a.placement.type;
@@ -613,7 +757,12 @@ int main(int argc, char** argv) {
         float useTime = itemDef(held).useTime;
         float swing = static_cast<float>(clampf(static_cast<float>((now - a.swingStart) / std::fmax(0.2, useTime * 0.6)), 0.0f, 1.0f));
         if (swing >= 1.0f) swing = 0.0f;
-        a.renderer.drawViewModel(held, swing, now - a.lastMuzzle < 0.05, self.phase, a.net.predicted().onGround ? self.amount : 0.0f);
+        if (itemDef(held).kind == ItemKind::Gun)  // guns: a short recoil kick, not a full swing
+          swing = clampf(static_cast<float>((now - a.swingStart) / 0.12), 0.0f, 1.0f) < 1.0f
+                      ? static_cast<float>((now - a.swingStart) / 0.12)
+                      : 0.0f;
+        a.renderer.drawViewModel(heldStack, swing, now - a.lastMuzzle < 0.05, self.phase,
+                                 a.net.predicted().onGround ? self.amount : 0.0f, a.aimT, a.scoped);
       }
     } else {
       // Menu background: slowly look around the island.
@@ -626,6 +775,7 @@ int main(int argc, char** argv) {
       a.renderer.drawWorld(menuTerrain, eye, noDepleted, 1);
     }
     a.renderer.endFrame();
+    a.audio.setVolume(a.volume);
 
     // --- UI ----------------------------------------------------------------------------------
     ImGui_ImplOpenGL3_NewFrame();
@@ -644,6 +794,7 @@ int main(int argc, char** argv) {
 
   leaveServer(a);
   stopHostedServers(a);
+  a.audio.shutdown();
   saveSettings(a);
   a.renderer.shutdown();
   ImGui_ImplOpenGL3_Shutdown();
