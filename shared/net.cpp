@@ -13,9 +13,11 @@ using socklen_t = int;
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <ifaddrs.h>
 #include <cerrno>
 #endif
 
+#include <algorithm>
 #include <cstring>
 
 namespace sg {
@@ -36,6 +38,45 @@ bool Address::parse(const std::string& host, uint16_t port, Address& out) {
   out.port = port;
   freeaddrinfo(result);
   return true;
+}
+
+std::vector<std::string> localAddresses() {
+  std::vector<std::string> out;
+#ifndef _WIN32
+  // Linux/macOS: the hostname usually resolves to 127.0.1.1, so list the interfaces instead.
+  ifaddrs* list = nullptr;
+  if (getifaddrs(&list) == 0) {
+    for (ifaddrs* i = list; i; i = i->ifa_next) {
+      if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
+      uint32_t ip = ntohl(reinterpret_cast<sockaddr_in*>(i->ifa_addr)->sin_addr.s_addr);
+      if ((ip >> 24) == 127 || (ip >> 16) == 0xA9FE) continue;
+      std::string s = Address{ip, 0}.toString();
+      s = s.substr(0, s.rfind(':'));
+      if (std::find(out.begin(), out.end(), s) == out.end()) out.push_back(s);
+    }
+    freeifaddrs(list);
+  }
+  if (!out.empty()) return out;
+#endif
+  char host[256] = {};
+  if (gethostname(host, sizeof(host) - 1) != 0) return out;
+  addrinfo hints{};
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_DGRAM;
+  addrinfo* result = nullptr;
+  if (getaddrinfo(host, nullptr, &hints, &result) != 0) return out;
+  for (addrinfo* a = result; a; a = a->ai_next) {
+    uint32_t ip = ntohl(reinterpret_cast<sockaddr_in*>(a->ai_addr)->sin_addr.s_addr);
+    if ((ip >> 24) == 127 || (ip >> 16) == 0xA9FE) continue;  // loopback, link-local
+    Address addr{ip, 0};
+    std::string s = addr.toString();
+    s = s.substr(0, s.rfind(':'));
+    bool seen = false;
+    for (const auto& o : out) seen = seen || o == s;
+    if (!seen) out.push_back(s);
+  }
+  freeaddrinfo(result);
+  return out;
 }
 
 bool netInit() {
@@ -75,6 +116,11 @@ bool UdpSocket::open(uint16_t port) {
   }
 
 #ifdef _WIN32
+  // Don't let an ICMP "port unreachable" (e.g. pinging an offline server) error out later receives.
+  BOOL reportReset = FALSE;
+  DWORD bytes = 0;
+  WSAIoctl(h, _WSAIOW(IOC_VENDOR, 12) /* SIO_UDP_CONNRESET */, &reportReset, sizeof(reportReset), nullptr, 0, &bytes,
+           nullptr, nullptr);
   u_long nonBlocking = 1;
   if (ioctlsocket(h, FIONBIO, &nonBlocking) != 0) { close(); return false; }
 #else

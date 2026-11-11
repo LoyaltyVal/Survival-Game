@@ -1,0 +1,47 @@
+# If this project is pushed to GitHub, every push builds ready-to-play downloads for
+# Windows and Linux (Actions tab -> latest run -> Artifacts).
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04  # older glibc = the binary runs on more distros
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake xorg-dev libgl1-mesa-dev
+      - name: Tests
+        run: |
+          cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Release -DSG_BUILD_CLIENT=OFF
+          cmake --build build-tests -j"$(nproc)"
+          ./build-tests/sg_tests
+      - name: Package
+        run: bash package-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: survival-game-linux-x86_64
+          path: dist/*.tar.gz
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -S . -B build
+          cmake --build build --config Release
+      - name: Tests
+        run: build\Release\sg_tests.exe
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist\survival-game-windows | Out-Null
+          Copy-Item build\Release\sg_client.exe, build\Release\sg_server.exe dist\survival-game-windows\
+          Compress-Archive dist\survival-game-windows dist\survival-game-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: survival-game-windows
+          path: dist/*.zip

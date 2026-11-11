@@ -75,6 +75,48 @@ struct Mat4 {
     r.at(2, 0) = -s; r.at(2, 2) = c;
     return r;
   }
+  static Mat4 rotateX(float a) {
+    Mat4 r;
+    float c = std::cos(a), s = std::sin(a);
+    r.at(1, 1) = c;  r.at(1, 2) = -s;
+    r.at(2, 1) = s;  r.at(2, 2) = c;
+    return r;
+  }
+  static Mat4 rotateZ(float a) {
+    Mat4 r;
+    float c = std::cos(a), s = std::sin(a);
+    r.at(0, 0) = c;  r.at(0, 1) = -s;
+    r.at(1, 0) = s;  r.at(1, 1) = c;
+    return r;
+  }
+  static Mat4 ortho(float l, float r_, float b, float t, float n, float f) {
+    Mat4 r;
+    r.at(0, 0) = 2.0f / (r_ - l);
+    r.at(1, 1) = 2.0f / (t - b);
+    r.at(2, 2) = -2.0f / (f - n);
+    r.at(0, 3) = -(r_ + l) / (r_ - l);
+    r.at(1, 3) = -(t + b) / (t - b);
+    r.at(2, 3) = -(f + n) / (f - n);
+    return r;
+  }
+  // Box-shaped "beam" from a to b with the given thickness (local cube -0.5..0.5 maps onto it).
+  static Mat4 beam(const Vec3& a, const Vec3& b, float w, float h) {
+    Vec3 d = b - a;
+    float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    Vec3 z = len > 1e-6f ? d / len : Vec3{0, 0, 1};
+    Vec3 up = std::fabs(z.y) > 0.95f ? Vec3{1, 0, 0} : Vec3{0, 1, 0};
+    Vec3 x{up.y * z.z - up.z * z.y, up.z * z.x - up.x * z.z, up.x * z.y - up.y * z.x};
+    float xl = std::sqrt(x.x * x.x + x.y * x.y + x.z * x.z);
+    x = x / xl;
+    Vec3 y{z.y * x.z - z.z * x.y, z.z * x.x - z.x * x.z, z.x * x.y - z.y * x.x};
+    Vec3 c = (a + b) * 0.5f;
+    Mat4 r;
+    r.at(0, 0) = x.x * w; r.at(1, 0) = x.y * w; r.at(2, 0) = x.z * w;
+    r.at(0, 1) = y.x * h; r.at(1, 1) = y.y * h; r.at(2, 1) = y.z * h;
+    r.at(0, 2) = z.x * len; r.at(1, 2) = z.y * len; r.at(2, 2) = z.z * len;
+    r.at(0, 3) = c.x; r.at(1, 3) = c.y; r.at(2, 3) = c.z;
+    return r;
+  }
   static Mat4 perspective(float fovyRad, float aspect, float zNear, float zFar) {
     Mat4 r;
     float f = 1.0f / std::tan(fovyRad * 0.5f);

@@ -1,0 +1,5 @@
+# Server list shown in the game. One per line:
+# name | host | port | map seed (used when the game hosts it for you)
+# Servers on 127.0.0.1 that aren't running are started by the game when you join.
+Balanced #1 - Main Island | 127.0.0.1 | 27015 | 1337
+Balanced #2 - Second Island | 127.0.0.1 | 27016 | 4242

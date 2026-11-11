@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace sg {
 
@@ -23,6 +24,9 @@ struct Address {
 struct AddressHash {
   size_t operator()(const Address& a) const { return (static_cast<size_t>(a.ip) << 16) ^ a.port; }
 };
+
+// This machine's IPv4 addresses other computers can use (no 127.x). For "tell your friends" screens.
+std::vector<std::string> localAddresses();
 
 // Call once at startup / shutdown (no-ops on POSIX).
 bool netInit();

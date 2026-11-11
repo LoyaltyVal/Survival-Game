@@ -2,3 +2,11 @@ build*/
 .vs/
 out/
 *.user
+
+build-linux/
+build-package/
+dist/
+*.zip
+*.sav
+*.sav.tmp
+settings.txt

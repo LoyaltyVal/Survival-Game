@@ -1,5 +1,6 @@
 #include "movement.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace sg {
@@ -14,11 +15,17 @@ PlayerInput sanitizeInput(const PlayerInput& in) {
   if (len > 1.0f) { out.moveX /= len; out.moveZ /= len; }  // no diagonal speed boost
   out.yaw = std::fmod(finiteOr(in.yaw, 0), 2.0f * kPi);
   out.pitch = clampf(finiteOr(in.pitch, 0), -kMaxPitch, kMaxPitch);
-  out.buttons = in.buttons & (kButtonJump | kButtonSprint);
+  out.buttons = in.buttons & (kButtonJump | kButtonSprint | kButtonPrimary);
+  out.slot = in.slot < 6 ? in.slot : 0;
   return out;
 }
 
-void applyInput(PlayerState& s, const PlayerInput& rawIn, const Terrain& terrain) {
+static AABB bodyAt(const Vec3& p) {
+  return {{p.x - kPlayerRadius, p.y + kStepUp, p.z - kPlayerRadius},
+          {p.x + kPlayerRadius, p.y + kPlayerHeight, p.z + kPlayerRadius}};
+}
+
+void applyInput(PlayerState& s, const PlayerInput& rawIn, const Terrain& terrain, const World* world) {
   const PlayerInput in = sanitizeInput(rawIn);
   const float dt = kInputDt;
 
@@ -28,7 +35,9 @@ void applyInput(PlayerState& s, const PlayerInput& rawIn, const Terrain& terrain
   // Desired horizontal velocity from the stick, relative to where we look.
   Vec3 forward{-std::sin(s.yaw), 0, -std::cos(s.yaw)};
   Vec3 right{std::cos(s.yaw), 0, -std::sin(s.yaw)};
-  float speed = (in.buttons & kButtonSprint) && in.moveZ > 0 ? kSprintSpeed : kWalkSpeed;
+  bool wantSprint = (in.buttons & kButtonSprint) && in.moveZ > 0;
+  bool sprinting = wantSprint && !s.exhausted && s.stamina > 0;
+  float speed = sprinting ? kSprintSpeed : kWalkSpeed;
   Vec3 wish = (forward * in.moveZ + right * in.moveX) * speed;
 
   // Accelerate toward the wished velocity (less control while airborne).
@@ -40,22 +49,65 @@ void applyInput(PlayerState& s, const PlayerInput& rawIn, const Terrain& terrain
   s.vel.x += diff.x;
   s.vel.z += diff.z;
 
+  // Stamina: sprinting while moving drains it, resting refills it.
+  bool spent = false;
+  float hspeed = std::sqrt(s.vel.x * s.vel.x + s.vel.z * s.vel.z);
+  if (sprinting && s.onGround && hspeed > 0.5f) {
+    s.stamina -= kSprintCost * dt;
+    spent = true;
+  }
+
   // Jump and gravity.
-  if (s.onGround && (in.buttons & kButtonJump)) {
+  if (s.onGround && (in.buttons & kButtonJump) && s.stamina >= kJumpCost) {
     s.vel.y = kJumpSpeed;
     s.onGround = false;
+    s.stamina -= kJumpCost;
+    spent = true;
   }
+  if (spent) {
+    s.staminaDelay = kStaminaDelay;
+    if (s.stamina <= 0) {
+      s.stamina = 0;
+      s.exhausted = true;
+    }
+  } else if (s.staminaDelay > 0) {
+    s.staminaDelay = std::max(0.0f, s.staminaDelay - dt);
+  } else {
+    s.stamina = std::min(kMaxStamina, s.stamina + kStaminaRegen * (s.starving ? 0.5f : 1.0f) * dt);
+  }
+  if (s.exhausted && s.stamina >= kExhaustRecover) s.exhausted = false;
+
   s.vel.y -= kGravity * dt;
 
-  s.pos += s.vel * dt;
+  // Horizontal movement, one axis at a time so we slide along walls.
+  const Vec3 old = s.pos;
+  const bool stuck = world && world->blocked(bodyAt(old));  // let players walk out of anything they spawned in
+  s.pos.x += s.vel.x * dt;
+  if (world && !stuck && world->blocked(bodyAt(s.pos))) {
+    s.pos.x = old.x;
+    s.vel.x = 0;
+  }
+  s.pos.z += s.vel.z * dt;
+  if (world && !stuck && world->blocked(bodyAt(s.pos))) {
+    s.pos.z = old.z;
+    s.vel.z = 0;
+  }
+
+  // Vertical: bump the head on ceilings.
+  const float prevY = s.pos.y;
+  s.pos.y += s.vel.y * dt;
+  if (world && !stuck && s.vel.y > 0 && world->blocked(bodyAt(s.pos))) {
+    s.pos.y = prevY;
+    s.vel.y = 0;
+  }
 
   // Stay on the island.
   s.pos.x = clampf(s.pos.x, 1.0f, kWorldSize - 1.0f);
   s.pos.z = clampf(s.pos.z, 1.0f, kWorldSize - 1.0f);
 
-  // Ground collision against the heightfield. (Bullet replaces this for
-  // buildings and rocks; terrain stays a heightfield.)
-  float ground = terrain.heightAt(s.pos.x, s.pos.z);
+  // Ground: terrain heightfield plus the tops of foundations, floors and stairs.
+  float ground = world ? world->groundHeight(terrain, s.pos.x, s.pos.z, kPlayerRadius, std::max(prevY, s.pos.y), kStepUp)
+                       : terrain.heightAt(s.pos.x, s.pos.z);
   if (s.pos.y <= ground) {
     s.pos.y = ground;
     if (s.vel.y < 0) s.vel.y = 0;
