@@ -27,12 +27,13 @@ struct CommandInfo {
 };
 
 const CommandInfo kCommands[] = {
-    {"help", Rank::Player, "/help [topic]", "How the game works. Topics: start gather craft build survive combat ranks"},
+    {"help", Rank::Player, "/help [topic]", "How the game works. Topics: start gather craft build survive combat armor rigs ranks"},
     {"players", Rank::Player, "/players", "Who is online, their rank and ping"},
     {"msg", Rank::Player, "/msg <player> <text>", "Private message (also /w)"},
     {"r", Rank::Player, "/r <text>", "Reply to your last private message"},
     {"pos", Rank::Player, "/pos", "Your coordinates"},
     {"time", Rank::Player, "/time", "Current time of day"},
+    {"rigs", Rank::Player, "/rigs", "Which way the oil rigs are and how far"},
     {"rules", Rank::Player, "/rules", "Server rules"},
     {"kill", Rank::Player, "/kill", "Respawn if you are stuck (you drop your items)"},
     {"kick", Rank::Moderator, "/kick <player> [reason]", "Remove a player from the server"},
@@ -69,8 +70,14 @@ const char* kHelpTopics[][2] = {
      "Survival: food drains slowly; saturation (the yellow line) is a buffer that drains first. Above 70 food you heal. "
      "At 0 food you starve. Sprinting and jumping use stamina. Nights are dark - build before sunset."},
     {"combat",
-     "Combat: pistol and rifle need ammo, headshots do double damage. When you die you drop a loot bag; "
-     "your boxes are safe. Place a sleeping bag to respawn at home."},
+     "Combat: guns need ammo. Headshots do double damage, legs and feet less. Bullets stop at walls, trees and rocks. "
+     "When you die you leave a body bag with everything you carried; your boxes are safe. Falls over ~4 m hurt."},
+    {"armor",
+     "Armor: craft hoods, shirts, pants and boots from cloth, wooden armor from wood and rope, metal armor at a "
+     "workbench. Right-click it (or hold it and click) to wear it. Each piece protects its body part and wears out."},
+    {"rigs",
+     "Oil rigs: two monuments out at sea (/rigs shows where). Swim out (Shift swims faster), climb the ladder with W. "
+     "Military crates there hold guns, armor and HQ metal and refill every 20 minutes. Expect company."},
     {"ranks",
      "Ranks: Owner > Admin > Moderator > Player. Mods: kick, mute, tp, announce. Admins: ban, give, heal, god, "
      "settime, rank. Use /rank <player> <rank>. You can only manage players below your rank."},
@@ -284,6 +291,19 @@ void Server::handleCommand(Client& c, const std::string& line) {
     char buf[96];
     std::snprintf(buf, sizeof(buf), "Position: %.0f, %.0f, %.0f", c.state.pos.x, c.state.pos.y, c.state.pos.z);
     info_(buf);
+    return;
+  }
+  if (cmd == "rigs") {
+    if (monuments_.empty()) return info_("There are no oil rigs on this map");
+    static const char* compass[] = {"north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"};
+    for (const auto& m : monuments_) {
+      float dx = m.center.x - c.state.pos.x, dz = m.center.z - c.state.pos.z;
+      float bearing = std::atan2(dx, -dz);  // 0 = north (-Z), clockwise
+      int idx = static_cast<int>(std::lround(bearing / (kPi / 4))) & 7;
+      char buf[128];
+      std::snprintf(buf, sizeof(buf), "%s: %.0f m %s", m.name.c_str(), std::sqrt(dx * dx + dz * dz), compass[idx]);
+      info_(buf);
+    }
     return;
   }
   if (cmd == "time") {

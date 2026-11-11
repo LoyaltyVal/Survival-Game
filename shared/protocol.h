@@ -7,6 +7,7 @@
 //  - reliable messages (inventory, building, crafting, chat, ...) carried in
 //    Reliable packets and resent until acknowledged. See reliable.h.
 #pragma once
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -20,7 +21,7 @@
 namespace sg {
 
 constexpr uint32_t kProtocolMagic = 0x31304753;  // "SG01"
-constexpr uint16_t kProtocolVersion = 4;
+constexpr uint16_t kProtocolVersion = 5;
 constexpr uint16_t kDefaultPort = 27015;
 constexpr size_t kMaxPacketSize = 1200;  // stays under typical MTU
 constexpr int kMaxInputsPerPacket = 4;   // redundancy against packet loss
@@ -41,8 +42,15 @@ enum class PacketType : uint8_t {
   Reliable = 7,     // either way: reliable messages + ack
   InfoRequest = 8,  // anyone -> server: server browser ping
   InfoReply = 9,    // server -> anyone
+  Voice = 10,       // either way: 40 ms of proximity voice chat
 };
-constexpr uint8_t kLastPacketType = 9;
+constexpr uint8_t kLastPacketType = 10;
+
+// Proximity voice: 16 kHz mono, IMA ADPCM (see adpcm.h), one 40 ms frame per packet.
+constexpr int kVoiceRate = 16000;
+constexpr size_t kVoiceFrameSamples = 640;
+constexpr size_t kVoiceFrameBytes = kVoiceFrameSamples / 2;
+constexpr float kVoiceRange = 45.0f;  // metres; you hear people within this
 
 enum class RejectReason : uint8_t { ServerFull = 1, BadVersion = 2, Banned = 3, NameInUse = 4, Kicked = 5 };
 
@@ -86,6 +94,7 @@ struct EntityState {
   float pitch = 0;
   Item held = Item::None;
   uint8_t flags = 0;
+  std::array<Item, kArmorSlots> wear{};  // clothing/armour, by ArmorSlot (so everyone sees it)
 };
 
 struct Vitals {
@@ -103,6 +112,14 @@ struct SnapshotPacket {
   Vitals vitals;
   float timeOfDay = 9.0f;           // hours, 0..24
   std::vector<EntityState> others;  // nearby players only
+};
+
+struct VoicePacket {
+  uint32_t speaker = 0;   // filled in by the server (clients send 0)
+  uint16_t seq = 0;
+  int16_t predictor = 0;  // ADPCM state at the start of this frame
+  uint8_t index = 0;
+  std::vector<uint8_t> data;  // <= kVoiceFrameBytes
 };
 
 struct InfoRequestPacket {
@@ -125,6 +142,7 @@ std::vector<uint8_t> encode(const InputPacket& p);
 std::vector<uint8_t> encode(const SnapshotPacket& p);
 std::vector<uint8_t> encode(const InfoRequestPacket& p);
 std::vector<uint8_t> encode(const InfoReplyPacket& p);
+std::vector<uint8_t> encode(const VoicePacket& p);
 std::vector<uint8_t> encodeDisconnect();
 
 // Reads the header. Returns the packet type, or nullopt if not ours.
@@ -138,6 +156,7 @@ bool decode(const uint8_t* data, size_t size, InputPacket& out);
 bool decode(const uint8_t* data, size_t size, SnapshotPacket& out);
 bool decode(const uint8_t* data, size_t size, InfoRequestPacket& out);
 bool decode(const uint8_t* data, size_t size, InfoReplyPacket& out);
+bool decode(const uint8_t* data, size_t size, VoicePacket& out);
 
 // --- reliable messages ----------------------------------------------------------
 // First byte of every reliable message. Contents are written/read with
@@ -153,7 +172,7 @@ enum class Msg : uint8_t {
   ContainerClosed,    //
   Text,               // u8 TextKind, str
   PlayerName,         // u32 id, str name, u8 rank (join or rank change)
-  HitConfirm,         // u8 flags (1 = headshot, 2 = kill)
+  HitConfirm,         // u8 flags (1 = headshot, 2 = kill, 4 = hit armour)
   Gathered,           // u16 item, u16 count
   Died,               // str cause
   PlayerLeft,         // u32 id

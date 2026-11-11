@@ -82,7 +82,7 @@ class Server {
 
     ReliableChannel reliable;
     Vitals vitals;
-    Slots inv = Slots(kInventorySlots);
+    Slots inv = Slots(kPlayerSlots);  // backpack + hotbar + clothing
     uint8_t slot = 0;
     double inputClock = 0;  // seconds of input simulated; cooldowns use this
     double nextUse = 0;
@@ -98,6 +98,8 @@ class Server {
     bool invDirty = true, craftDirty = true;
     double lastWarn = -1e9;
     double lastChat = -1e9;
+    double voiceWindow = 0;  // voice packets this second (flood guard)
+    int voiceCount = 0;
     uint8_t kick = 0;       // RejectReason to send; removed at the end of the tick
     uint32_t replyTo = 0;   // last player who /msg'd us, for /r
     bool god = false;       // /god: takes no damage, never starves
@@ -121,6 +123,8 @@ class Server {
     float dist = 0;
     uint32_t playerId = 0, objectId = 0;
     bool head = false;
+    bool node = false;  // stopped by a tree or rock
+    float relY = 0;  // hit height above the target's feet (picks the body zone)
   };
   struct PlayerRecord {  // a player's saved state while offline
     uint32_t id = 0;
@@ -140,6 +144,7 @@ class Server {
   void handleHello(const Address& from, const uint8_t* data, size_t size);
   void handleInput(Client& c, const uint8_t* data, size_t size);
   void handleInfoRequest(const Address& from, const uint8_t* data, size_t size);
+  void handleVoice(Client& c, const uint8_t* data, size_t size);  // relays to players within kVoiceRange
   void sendSnapshots();
   void flushReliable(Client& c);
   void dropTimedOut();
@@ -190,7 +195,11 @@ class Server {
   void doDetach(Client& c, uint32_t container, int gunSlot, int modSlot);
   void updateCharges();
   void explode(uint32_t chargeId);
-  void damagePlayer(Client& victim, float amount, Client* attacker, const char* weapon, bool headshot);
+  void damagePlayer(Client& victim, float amount, Client* attacker, const char* weapon, bool headshot, bool armored = false);
+  // Armour on that body zone soaks up part of the damage and wears down (breaking at its durability).
+  // Returns what gets through. hitArmor is set when it hit hard armour (metal ping for the shooter).
+  float absorb(Client& victim, ArmorSlot zone, float amount, bool melee, bool* hitArmor = nullptr);
+  float absorbBlast(Client& victim, float amount);
   void killPlayer(Client& victim, const std::string& cause, const std::string& feed);
   void respawnPlayer(Client& c, bool atBag);
   void damageObject(uint32_t id, float amount);
@@ -198,7 +207,17 @@ class Server {
   void updateCrafting(Client& c, float dt);
   void updateWorld();
   void give(Client& c, Item item, int count);  // overflow goes into a loot bag
-  uint32_t spawnLootBag(const Vec3& pos, const Slots& items);
+  // type LootBag (dropped items) or BodyBag (a dead player, owner = their id).
+  uint32_t spawnLootBag(const Vec3& pos, const Slots& items, ObjType type = ObjType::LootBag, uint32_t owner = 0,
+                        uint8_t rot = 0);
+  // monuments (monuments.cpp)
+  void spawnOilRigs();
+  void buildOilRig(float cx, float cz, int tiles, int decks, const std::string& name);
+  void fillCrate(uint32_t id);
+  void updateCrates();
+  bool nearMonument(const Vec3& p) const;
+  // Nothing solid (walls, rocks, terrain) between two points.
+  bool clearLine(const Vec3& a, const Vec3& b) const;
   Slots* containerFor(Client& c, uint32_t id);
   bool nearWorkbench(const Client& c) const;
   Vec3 positionAt(const Client& c, double time) const;
@@ -225,6 +244,13 @@ class Server {
   std::unordered_map<std::string, Rank> ranks_;  // by name; missing = Player
   std::unordered_set<std::string> bans_;
   std::unordered_set<std::string> mutes_;
+  struct Monument {
+    std::string name;
+    Vec3 center;
+    float radius;  // no building inside this
+  };
+  std::vector<Monument> monuments_;
+  std::unordered_map<uint32_t, double> crateRefill_;  // military crate -> next refill time
   float timeOfDay_ = 9.0f;                        // hours
   uint32_t nextPlayerId_ = 1;
   uint32_t nextObjectId_ = 1;

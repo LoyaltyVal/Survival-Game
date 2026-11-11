@@ -10,7 +10,9 @@ const char* soundName(Sound s) {
                                 "gun_ar",     "gun_rifle",    "gun_sniper",   "gun_silenced", "reload",    "dry_fire",
                                 "swing",      "hit_wood",     "hit_stone",    "hit_flesh",    "hitmarker", "headshot",
                                 "kill",       "build",        "door",         "pickup",       "footstep",  "explosion",
-                                "beep",       "unlock",       "denied"};
+                                "beep",       "unlock",       "denied",       "hit_armor",    "equip",
+                                "step_wood",  "step_metal",   "swim",         "amb_wind",     "amb_ocean", "amb_birds",
+                                "amb_night",  "step_grass",   "step_sand",    "step_rock",    "step_snow"};
   size_t i = static_cast<size_t>(s);
   return i < sizeof(names) / sizeof(names[0]) ? names[i] : "";
 }
@@ -186,6 +188,27 @@ static std::array<ItemDef, kItemCount> buildDefs() {
   deploy(Item::StorageBox, "Storage Box", "BOX", {0.60f, 0.42f, 0.22f}, 3, "Stores 18 stacks. Keeps your loot when you die.");
   deploy(Item::Workbench, "Workbench", "BENCH", {0.50f, 0.35f, 0.20f}, 1, "Stand near it to craft guns and attachments.");
   deploy(Item::SleepingBag, "Sleeping Bag", "BAG", {0.70f, 0.20f, 0.15f}, 3, "Respawn here after you die.");
+
+  auto armor = [&](Item i, const char* name, const char* shortName, ArmorSlot slot, Vec3 color, float bullet, float melee,
+                   int durability, const char* desc) {
+    ItemDef& x = def(i);
+    x.name = name; x.shortName = shortName; x.description = desc;
+    x.kind = ItemKind::Armor; x.maxStack = 1; x.color = color; x.armorSlot = slot;
+    x.armorBullet = bullet; x.armorMelee = melee; x.durability = static_cast<uint16_t>(durability);
+    x.damage = 0; x.gatherWood = 0; x.useTime = 0.5f;
+  };
+  using A = ArmorSlot;
+  armor(Item::ClothHood, "Cloth Hood", "HOOD", A::Head, {0.55f, 0.47f, 0.33f}, 0.08f, 0.12f, 80, "Keeps the sun off. Barely stops anything.");
+  armor(Item::WoodHelmet, "Wooden Helmet", "W.HELM", A::Head, {0.55f, 0.38f, 0.20f}, 0.15f, 0.35f, 200, "Carved planks. Good against clubs and spears.");
+  armor(Item::MetalHelmet, "Metal Helmet", "M.HELM", A::Head, {0.42f, 0.44f, 0.46f}, 0.45f, 0.50f, 450, "Welded dome with a face plate. Saves you from headshots.");
+  armor(Item::ClothShirt, "Cloth Shirt", "SHIRT", A::Chest, {0.55f, 0.47f, 0.33f}, 0.08f, 0.12f, 100, "Long-sleeved burlap shirt.");
+  armor(Item::WoodChestplate, "Wooden Chestplate", "W.CHEST", A::Chest, {0.55f, 0.38f, 0.20f}, 0.18f, 0.40f, 260, "Planks lashed together with rope.");
+  armor(Item::MetalChestplate, "Metal Chestplate", "M.CHEST", A::Chest, {0.42f, 0.44f, 0.46f}, 0.45f, 0.50f, 600, "Heavy plates front and back with shoulder guards.");
+  armor(Item::ClothPants, "Cloth Pants", "PANTS", A::Legs, {0.50f, 0.43f, 0.30f}, 0.08f, 0.12f, 100, "Burlap trousers.");
+  armor(Item::WoodLegGuards, "Wooden Leg Guards", "W.LEGS", A::Legs, {0.55f, 0.38f, 0.20f}, 0.15f, 0.35f, 220, "Planks strapped over the thighs and shins.");
+  armor(Item::PlatedPants, "Plated Pants", "M.LEGS", A::Legs, {0.42f, 0.44f, 0.46f}, 0.35f, 0.40f, 450, "Heavy trousers with metal thigh plates and knee caps.");
+  armor(Item::Boots, "Boots", "BOOTS", A::Feet, {0.30f, 0.20f, 0.12f}, 0.08f, 0.15f, 120, "Stitched cloth boots with rope soles.");
+  armor(Item::ArmoredBoots, "Armored Boots", "M.BOOT", A::Feet, {0.42f, 0.44f, 0.46f}, 0.30f, 0.35f, 350, "Steel toe caps and shin guards.");
   return d;
 }
 
@@ -279,9 +302,39 @@ int countItem(const Slots& s, Item item) {
   return n;
 }
 
+bool isWearSlot(const Slots& s, int slot) {
+  return s.size() == static_cast<size_t>(kPlayerSlots) && slot >= kWearFirst && slot < kPlayerSlots;
+}
+
+bool slotAccepts(const Slots& s, int slot, Item item) {
+  if (!isWearSlot(s, slot) || item == Item::None) return true;
+  const ItemDef& d = itemDef(item);
+  return d.kind == ItemKind::Armor && wearSlot(d.armorSlot) == slot;
+}
+
+Item wornAt(const Slots& inv, ArmorSlot a) {
+  if (inv.size() != static_cast<size_t>(kPlayerSlots)) return Item::None;
+  const ItemStack& st = inv[static_cast<size_t>(wearSlot(a))];
+  return st.empty() ? Item::None : st.item;
+}
+
+uint8_t armorCode(Item item) {
+  if (item == Item::None || itemDef(item).kind != ItemKind::Armor) return 0;
+  return static_cast<uint8_t>(static_cast<int>(item) - static_cast<int>(Item::ClothHood) + 1);
+}
+
+Item armorFromCode(uint8_t code) {
+  if (code == 0) return Item::None;
+  int raw = static_cast<int>(Item::ClothHood) + code - 1;
+  if (raw >= static_cast<int>(Item::Count)) return Item::None;
+  Item it = static_cast<Item>(raw);
+  return itemDef(it).kind == ItemKind::Armor ? it : Item::None;
+}
+
 int addItem(Slots& s, Item item, int count, int lo, int hi) {
   if (item == Item::None || count <= 0) return 0;
   if (hi < 0 || hi > static_cast<int>(s.size())) hi = static_cast<int>(s.size());
+  if (s.size() == static_cast<size_t>(kPlayerSlots)) hi = std::min(hi, kInventorySlots);  // never into clothing slots
   const int maxStack = itemDef(item).maxStack;
   for (int i = lo; i < hi && count > 0; ++i) {  // top up existing stacks first
     if (s[i].item != item || s[i].count >= maxStack) continue;
@@ -320,11 +373,17 @@ bool moveItem(Slots& from, int fromSlot, Slots& to, int toSlot, int count) {
 
   if (toSlot == kAutoSlot) {
     if (itemDef(src.item).maxStack == 1) {  // single items keep their magazine/attachments: move whole
+      const ItemDef& d = itemDef(src.item);
+      if (&from == &to && d.kind == ItemKind::Armor && !isWearSlot(to, fromSlot) && to.size() == static_cast<size_t>(kPlayerSlots)) {
+        std::swap(src, to[static_cast<size_t>(wearSlot(d.armorSlot))]);  // quick-move armour = put it on
+        return true;
+      }
       int lo = 0, hi = static_cast<int>(to.size());
-      if (&from == &to) {
+      if (&from == &to && !isWearSlot(from, fromSlot)) {
         if (fromSlot < kHotbarSlots) lo = kHotbarSlots;
         else hi = kHotbarSlots;
       }
+      if (to.size() == static_cast<size_t>(kPlayerSlots)) hi = std::min(hi, kInventorySlots);
       for (int i = lo; i < hi; ++i)
         if (to[i].empty()) {
           to[i] = src;
@@ -334,7 +393,7 @@ bool moveItem(Slots& from, int fromSlot, Slots& to, int toSlot, int count) {
       return false;
     }
     int lo = 0, hi = static_cast<int>(to.size());
-    if (&from == &to) {  // quick move inside one inventory: hotbar <-> main grid
+    if (&from == &to && !isWearSlot(from, fromSlot)) {  // quick move inside one inventory: hotbar <-> main grid
       if (fromSlot < kHotbarSlots) lo = kHotbarSlots;
       else hi = kHotbarSlots;
     }
@@ -347,7 +406,9 @@ bool moveItem(Slots& from, int fromSlot, Slots& to, int toSlot, int count) {
 
   if (toSlot < 0 || toSlot >= static_cast<int>(to.size())) return false;
   if (&from == &to && fromSlot == toSlot) return false;
+  if (!slotAccepts(to, toSlot, src.item)) return false;
   ItemStack& dst = to[toSlot];
+  if (!dst.empty() && !slotAccepts(from, fromSlot, dst.item)) return false;  // the swap would put it somewhere it can't go
   if (dst.empty()) {
     dst = src;
     dst.count = static_cast<uint16_t>(n);
@@ -410,6 +471,7 @@ bool readSlots(ByteReader& r, Slots& s, bool extended) {
         if (m != Item::None && (!modFits(st.item, m) || itemDef(m).modSlot != slot)) setMod(st, slot, Item::None);
       }
     }
+    if (d.kind == ItemKind::Armor) st.data = std::min<uint16_t>(data, d.durability);
     s[i] = st;
   }
   return true;
@@ -462,6 +524,18 @@ const std::vector<Recipe>& recipes() {
       {Item::Explosives, 1, {{{Item::Gunpowder, 40}, {Item::MetalFrags, 10}, {Item::SulfurOre, 10}}}, 5.0f, true},
       {Item::PipeBomb, 1, {{{Item::Gunpowder, 20}, {Item::MetalFrags, 15}, {Item::Rope, 1}}}, 4.0f, false},
       {Item::ExplosiveCharge, 1, {{{Item::Explosives, 15}, {Item::GunParts, 2}, {Item::Cloth, 5}}}, 15.0f, true},
+      // --- 0.5: clothing and armour ---
+      {Item::ClothHood, 1, {{{Item::Cloth, 10}}}, 2.0f, false},
+      {Item::ClothShirt, 1, {{{Item::Cloth, 20}}}, 3.0f, false},
+      {Item::ClothPants, 1, {{{Item::Cloth, 20}}}, 3.0f, false},
+      {Item::Boots, 1, {{{Item::Cloth, 15}, {Item::Rope, 1}}}, 3.0f, false},
+      {Item::WoodHelmet, 1, {{{Item::Wood, 100}, {Item::Rope, 1}}}, 4.0f, false},
+      {Item::WoodChestplate, 1, {{{Item::Wood, 250}, {Item::Rope, 2}}}, 6.0f, false},
+      {Item::WoodLegGuards, 1, {{{Item::Wood, 200}, {Item::Rope, 2}}}, 5.0f, false},
+      {Item::MetalHelmet, 1, {{{Item::MetalFrags, 75}, {Item::HQMetal, 5}, {Item::Cloth, 10}}}, 8.0f, true},
+      {Item::MetalChestplate, 1, {{{Item::MetalFrags, 200}, {Item::HQMetal, 15}, {Item::Cloth, 20}}}, 12.0f, true},
+      {Item::PlatedPants, 1, {{{Item::MetalFrags, 120}, {Item::HQMetal, 8}, {Item::Cloth, 20}}}, 10.0f, true},
+      {Item::ArmoredBoots, 1, {{{Item::MetalFrags, 60}, {Item::HQMetal, 3}, {Item::Cloth, 10}}}, 6.0f, true},
   };
   return list;
 }

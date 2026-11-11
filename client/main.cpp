@@ -11,6 +11,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -35,11 +36,30 @@ double g_scroll = 0;
 
 void onScroll(GLFWwindow*, double, double dy) { g_scroll += dy; }
 
-Vec3 colorForId(uint32_t id) {
-  // Muted, readable colours in linear space.
-  const Vec3 palette[] = {{0.55f, 0.12f, 0.08f}, {0.10f, 0.25f, 0.55f}, {0.45f, 0.38f, 0.10f},
-                          {0.20f, 0.40f, 0.20f}, {0.40f, 0.15f, 0.40f}, {0.10f, 0.40f, 0.42f}};
-  return palette[id % 6];
+// What a footstep at `feet` sounds like: whatever is under it, matching how the ground is drawn
+// (sand on the beach, rock on steep slopes, snow on the peaks, grass elsewhere) or the floor you stand on.
+Sound stepSound(const App& a, const Vec3& feet) {
+  const Terrain& t = a.net.terrain();
+  const float ground = t.heightAt(feet.x, feet.z);
+  if (feet.y < kSeaLevel - 0.15f && ground < kSeaLevel) return Sound::Swim;  // wading or swimming
+  if (feet.y > ground + 0.08f) {
+    if (auto h = a.net.world().raycast(feet + Vec3{0, 0.3f, 0}, {0, -1, 0}, 0.6f, false))
+      if (const WorldObject* o = a.net.world().find(h->objectId))
+        return o->tier == Tier::Metal || (o->flags & kMonument) ? Sound::StepMetal
+               : o->tier == Tier::Stone                       ? Sound::StepRock
+                                                              : Sound::StepWood;
+  }
+  if (ground < 2.0f) return Sound::StepSand;
+  if (1.0f - t.normalAt(feet.x, feet.z).y > 0.19f) return Sound::StepRock;
+  if (ground > 63.0f) return Sound::StepSnow;
+  return Sound::StepGrass;
+}
+
+// Your own character: the look everyone else sees, wearing what is in your clothing slots.
+PlayerLook selfLook(const App& a) {
+  PlayerLook look = lookFor(a.net.playerId());
+  for (int k = 0; k < kArmorSlots; ++k) look.wear[static_cast<size_t>(k)] = wornAt(a.net.inventory(), static_cast<ArmorSlot>(k));
+  return look;
 }
 
 // --- settings and server list files ------------------------------------------------------
@@ -50,16 +70,49 @@ void loadSettings(App& a) {
     auto eq = line.find('=');
     if (eq == std::string::npos) continue;
     std::string key = line.substr(0, eq), value = line.substr(eq + 1);
+    const float num = std::strtof(value.c_str(), nullptr);
+    const bool on = value == "1";
     if (key == "name" && !value.empty()) std::snprintf(a.playerName, sizeof(a.playerName), "%s", value.c_str());
-    else if (key == "sensitivity") a.mouseSensitivity = clampf(std::strtof(value.c_str(), nullptr), 0.2f, 3.0f);
-    else if (key == "volume") a.volume = clampf(std::strtof(value.c_str(), nullptr), 0.0f, 1.0f);
+    else if (key == "sensitivity") a.mouseSensitivity = clampf(num, 0.2f, 3.0f);
+    else if (key == "volume") a.volume = clampf(num, 0.0f, 1.0f);
+    else if (key == "invert_y") a.invertY = on;
+    else if (key == "fov") a.fov = clampf(num, 55.0f, 100.0f);
+    else if (key == "fullscreen") a.fullscreen = on;
+    else if (key == "vsync") a.vsync = on;
+    else if (key == "show_fps") a.showFps = on;
+    else if (key == "ambience") a.ambienceVolume = clampf(num, 0.0f, 1.0f);
+    else if (key == "voice_volume") a.voiceVolume = clampf(num, 0.0f, 2.0f);
+    else if (key == "mic_gain") a.micGain = clampf(num, 0.2f, 4.0f);
+    else if (key == "voice_mode") a.voiceMode = std::clamp(std::atoi(value.c_str()), 0, 2);
+    else if (key == "voice_threshold") a.voiceThreshold = clampf(num, 0.005f, 0.3f);
   }
 }
 
-void saveSettings(const App& a) {
+}  // namespace
+
+void sg::saveSettings(const App& a) {
   std::ofstream f("settings.txt");
-  f << "name=" << a.playerName << "\nsensitivity=" << a.mouseSensitivity << "\nvolume=" << a.volume << "\n";
+  f << "name=" << a.playerName << "\nsensitivity=" << a.mouseSensitivity << "\nvolume=" << a.volume
+    << "\ninvert_y=" << a.invertY << "\nfov=" << a.fov << "\nfullscreen=" << a.fullscreen << "\nvsync=" << a.vsync
+    << "\nshow_fps=" << a.showFps << "\nambience=" << a.ambienceVolume << "\nvoice_volume=" << a.voiceVolume
+    << "\nmic_gain=" << a.micGain << "\nvoice_mode=" << a.voiceMode << "\nvoice_threshold=" << a.voiceThreshold << "\n";
 }
+
+void sg::applyVideo(App& a) {
+  GLFWmonitor* current = glfwGetWindowMonitor(a.window);
+  if (a.fullscreen && !current) {
+    glfwGetWindowPos(a.window, &a.windowedX, &a.windowedY);
+    glfwGetWindowSize(a.window, &a.windowedW, &a.windowedH);
+    GLFWmonitor* m = glfwGetPrimaryMonitor();
+    if (const GLFWvidmode* mode = m ? glfwGetVideoMode(m) : nullptr)
+      glfwSetWindowMonitor(a.window, m, 0, 0, mode->width, mode->height, mode->refreshRate);
+  } else if (!a.fullscreen && current) {
+    glfwSetWindowMonitor(a.window, nullptr, a.windowedX, a.windowedY, a.windowedW, a.windowedH, 0);
+  }
+  glfwSwapInterval(a.vsync ? 1 : 0);
+}
+
+namespace {
 
 void loadServers(App& a) {
   const char* path = "servers.txt";
@@ -245,6 +298,9 @@ void removeServer(App& a, int index) {
 
 void leaveServer(App& a, const std::string& error) {
   a.net.disconnect();  // hosted worlds keep running; they save when the game quits
+  a.audio.clearVoices();
+  a.speaking.clear();
+  a.transmitting = false;
   resetGameUi(a);
   a.connectError = error;
   a.screen = Screen::ServerBrowser;
@@ -293,7 +349,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   glfwMakeContextCurrent(a.window);
-  glfwSwapInterval(1);
+  applyVideo(a);  // fullscreen and vsync from settings.txt
   if (!loadGL(reinterpret_cast<GLLoadFn>(glfwGetProcAddress))) return 1;
   glfwSetScrollCallback(a.window, onScroll);  // before ImGui so it chains to ours
 
@@ -388,7 +444,7 @@ int main(int argc, char** argv) {
       return edge;
     };
     const bool pEsc = pressed(GLFW_KEY_ESCAPE), pTab = pressed(GLFW_KEY_TAB), pI = pressed(GLFW_KEY_I);
-    const bool pEnter = pressed(GLFW_KEY_ENTER), pV = pressed(GLFW_KEY_V), pR = pressed(GLFW_KEY_R);
+    const bool pEnter = pressed(GLFW_KEY_ENTER), pF5 = pressed(GLFW_KEY_F5), pR = pressed(GLFW_KEY_R);
     const bool pE = pressed(GLFW_KEY_E), pP = pressed(GLFW_KEY_P);
     bool pNum[kHotbarSlots];
     for (int i = 0; i < kHotbarSlots; ++i) pNum[i] = pressed(GLFW_KEY_1 + i);
@@ -403,7 +459,10 @@ int main(int argc, char** argv) {
       const bool dead = a.net.vitals().dead;
       const bool typing = io.WantTextInput;
       if (pEsc) {
-        if (a.codeOpen) a.codeOpen = false;
+        if (a.settingsOpen) {
+          a.settingsOpen = false;  // back to the pause menu
+          saveSettings(a);
+        } else if (a.codeOpen) a.codeOpen = false;
         else if (a.chatOpen) a.chatOpen = false;
         else if (a.showPlayers) a.showPlayers = false;
         else if (a.inventoryOpen) {
@@ -437,7 +496,7 @@ int main(int argc, char** argv) {
         a.codeMode = promptMode;
         a.codeBuf[0] = 0;
       }
-      const bool uiOpen = a.inventoryOpen || a.pauseOpen || a.chatOpen || a.showPlayers || a.codeOpen || dead;
+      const bool uiOpen = a.inventoryOpen || a.pauseOpen || a.chatOpen || a.showPlayers || a.codeOpen || a.settingsOpen || dead;
       captured = !uiOpen && glfwGetWindowAttrib(a.window, GLFW_FOCUSED);
 
       if (captured) {
@@ -450,7 +509,7 @@ int main(int argc, char** argv) {
           a.reloadEnd = 0;
           a.burstShots = 0;
         }
-        if (pV) a.thirdPerson = !a.thirdPerson;
+        if (pF5) a.thirdPerson = !a.thirdPerson;
         if (pR) {
           if (itemDef(a.heldItem()).kind == ItemKind::Gun) a.wantReload = true;
           else a.buildPiece = (a.buildPiece + 1) % static_cast<int>(buildPlanPieces().size());
@@ -469,11 +528,44 @@ int main(int argc, char** argv) {
       // Slower mouse when zoomed in, so aiming through a scope feels the same as at the hip.
       const float sens = kBaseSensitivity * a.mouseSensitivity / lerpf(1.0f, a.zoom, a.aimT);
       a.yaw -= static_cast<float>(mx - lastX) * sens;
-      a.pitch = clampf(a.pitch - static_cast<float>(my - lastY) * sens, -kMaxPitch, kMaxPitch);
+      a.pitch = clampf(a.pitch - static_cast<float>(my - lastY) * sens * (a.invertY ? -1.0f : 1.0f), -kMaxPitch, kMaxPitch);
     }
     haveCursor = captured;
     lastX = mx;
     lastY = my;
+
+    // --- proximity voice chat ---------------------------------------------------------------
+    {
+      const bool inGame = a.screen == Screen::InGame;
+      const bool wantMic = (inGame && a.voiceMode != 0) || a.micTest;
+      a.micTest = false;  // the settings window asks again every frame it shows the meter
+      if (wantMic && !a.mic.running() && !a.micFailed) a.micFailed = !a.mic.start();
+      if (!wantMic && a.mic.running()) a.mic.stop();
+      if (!wantMic) a.micFailed = false;  // try again next time
+      bool talk = false;
+      if (inGame && a.voiceMode == 1)  // push to talk: hold V (not while typing)
+        talk = glfwGetKey(a.window, GLFW_KEY_V) == GLFW_PRESS && !io.WantTextInput && !a.chatOpen &&
+               glfwGetWindowAttrib(a.window, GLFW_FOCUSED);
+      std::vector<int16_t> frame;
+      while (a.mic.pop(frame)) {
+        float sum = 0;
+        for (auto& x : frame) {
+          x = static_cast<int16_t>(std::clamp(static_cast<float>(x) * a.micGain, -32768.0f, 32767.0f));
+          sum += static_cast<float>(x) * static_cast<float>(x);
+        }
+        const float rms = std::sqrt(sum / static_cast<float>(frame.size())) / 32768.0f;
+        if (inGame && a.voiceMode == 2) {  // open mic: send while you're louder than the threshold, plus a short tail
+          if (rms > a.voiceThreshold) a.voiceHold = now + 0.4;
+          talk = now < a.voiceHold;
+        }
+        if (talk && inGame && !a.net.vitals().dead) a.net.sendVoice(frame.data(), frame.size());
+      }
+      a.transmitting = talk && inGame && !a.net.vitals().dead;
+      for (auto& chunk : a.net.takeVoice()) {
+        a.audio.voice(chunk.speaker, chunk.pcm.data(), chunk.pcm.size(), a.voiceVolume);
+        a.speaking[chunk.speaker] = now;
+      }
+    }
 
     // --- gameplay (fixed 60 Hz input) ----------------------------------------------------------
     Vec3 feet;
@@ -610,10 +702,24 @@ int main(int argc, char** argv) {
               case ObjType::LargeBox: a.prompt = std::string("E  Open large box") + lockNote; break;
               case ObjType::Stash: a.prompt = std::string("E  Open stash") + lockNote; break;
               case ObjType::LandClaim: a.prompt = std::string("E  Authorize / deauthorize (25 m building rights)") + lockNote; break;
-              case ObjType::LootBag: a.prompt = "E  Open loot bag"; break;
+              case ObjType::LootBag: a.prompt = "E  Open dropped items"; break;
+              case ObjType::BodyBag: {
+                auto who = a.net.players().find(o->owner);
+                a.prompt = o->owner == a.net.playerId() ? "E  Search your body"
+                           : who != a.net.players().end() ? "E  Search " + who->second.name + "'s body"
+                                                          : std::string("E  Search body bag");
+                break;
+              }
+              case ObjType::Crate: a.prompt = "E  Open military crate"; break;
+              case ObjType::Ladder: a.prompt = "W  Climb   S  Climb down"; a.lookObject = 0; break;
+              case ObjType::RigLeg: case ObjType::Railing: a.prompt.clear(); a.lookObject = 0; break;
               case ObjType::Charge: a.prompt = "Explosive! Run!"; a.lookObject = 0; break;
               case ObjType::SleepingBag: a.prompt = o->owner == a.net.playerId() ? "Your sleeping bag" : "Sleeping bag"; break;
               default: {
+                if (o->flags & kMonument) {  // oil rig decks and walls: nothing to do with them
+                  a.lookObject = 0;
+                  break;
+                }
                 char buf[96];
                 std::snprintf(buf, sizeof(buf), "%s %s   %.0f / %.0f", tierName(o->tier), objName(o->type), o->hp,
                               maxHp(o->type, o->tier));
@@ -683,13 +789,35 @@ int main(int argc, char** argv) {
       cam.pitch = a.pitch;
       cam.eye = feet + Vec3{0, kEyeHeight, 0};
       if (a.thirdPerson) cam.eye = cam.eye - directionFromYawPitch(cam.yaw, cam.pitch) * 4.0f + Vec3{0, 0.5f, 0};
-      cam.fovY = 70.0f * kPi / 180.0f / lerpf(1.0f, a.zoom, a.aimT);
+      cam.fovY = a.fov * kPi / 180.0f / lerpf(1.0f, a.zoom, a.aimT);
       if (a.shake > 0) {  // explosions rattle the camera
         cam.yaw += (rnd(fx) - 0.5f) * 0.03f * a.shake;
         cam.pitch += (rnd(fx) - 0.5f) * 0.03f * a.shake;
         a.shake = std::fmax(0.0f, a.shake - static_cast<float>(frameDt) * 1.5f);
       }
       a.audio.setListener(cam.eye, directionFromYawPitch(cam.yaw, cam.pitch));
+      {  // Ambience: surf near the coast, wind up high, birds by day and crickets at night.
+        static double nextSample = 0;
+        static float wet = 0;
+        const Terrain& tr = a.net.terrain();
+        if (now >= nextSample) {
+          nextSample = now + 0.5;
+          int hits = 0, total = 0;
+          for (float r : {12.0f, 35.0f, 70.0f})
+            for (int k = 0; k < 8; ++k, ++total) {
+              float ang = static_cast<float>(k) * kPi / 4;
+              if (tr.heightAt(cam.eye.x + std::cos(ang) * r, cam.eye.z + std::sin(ang) * r) < kSeaLevel) ++hits;
+            }
+          wet = static_cast<float>(hits) / static_cast<float>(total);
+        }
+        const float tod = a.net.timeOfDay();
+        const float day = clampf((tod - 5.0f) / 1.5f, 0, 1) * clampf((20.5f - tod) / 1.5f, 0, 1);
+        const float alt = cam.eye.y;
+        const float amb = a.ambienceVolume;
+        a.audio.setAmbience((0.3f + clampf(alt / 90.0f, 0, 0.7f)) * amb, wet * clampf(1.0f - (alt - 15.0f) / 120.0f, 0.25f, 1.0f) * amb,
+                            day * (1 - wet) * clampf(1.0f - alt / 120.0f, 0, 1) * amb, (1 - day) * (1 - wet) * amb,
+                            static_cast<float>(frameDt));
+      }
       a.renderer.beginFrame(cam, static_cast<float>(now), a.net.timeOfDay());
       a.renderer.drawWorld(a.net.terrain(), feet, a.net.depletedNodes(), a.net.nodesVersion());
       a.renderer.drawObjects(a.net.world());
@@ -702,13 +830,15 @@ int main(int argc, char** argv) {
         w.last = pos;
         float before = w.phase;
         w.phase += dist * 2.4f;
-        // A footstep each half stride (every ~1.3 m).
+        // A footstep each half stride (every ~1.3 m), sounding like what they walk on.
         if (std::floor(before / kPi) != std::floor(w.phase / kPi) && dist > 0) {
+          const Sound step = stepSound(a, pos);
           if (id == a.net.playerId()) {
-            if (a.net.predicted().onGround) a.audio.play(Sound::Footstep, nullptr, 0.35f, 0.85f + 0.3f * rnd(fx));
+            if (a.net.predicted().onGround || step == Sound::Swim)
+              a.audio.play(step, nullptr, step == Sound::Swim ? 0.5f : 0.35f, 0.85f + 0.3f * rnd(fx));
           } else if (length(pos - feet) < 35.0f) {
             Vec3 at = pos;
-            a.audio.play(Sound::Footstep, &at, 0.6f, 0.85f + 0.3f * rnd(fx));
+            a.audio.play(step, &at, 0.6f, 0.85f + 0.3f * rnd(fx));
           }
         }
         float speed = frameDt > 0 ? dist / static_cast<float>(frameDt) : 0;
@@ -717,20 +847,20 @@ int main(int argc, char** argv) {
       };
       for (const auto& p : a.net.remotePlayers(now)) {
         WalkState w = walk(p.id, p.pos);
-        PlayerLook look;
-        look.shirt = colorForId(p.id);
+        PlayerLook look = lookFor(p.id);
+        look.wear = p.wear;
         look.held = p.held;
         look.dead = p.flags & kEntityDead;
         look.attacking = p.flags & kEntityAttacking;
         look.walkPhase = w.phase;
         look.walkAmount = w.amount;
         a.renderer.drawPlayer(p.pos, p.yaw, p.pitch, look);
+        a.audio.setVoicePosition(p.id, p.pos + Vec3{0, kEyeHeight, 0});  // their voice comes from their head
       }
       const bool dead = a.net.vitals().dead;
       WalkState self = walk(a.net.playerId(), feet);
       if (a.thirdPerson && !dead) {
-        PlayerLook look;
-        look.shirt = colorForId(a.net.playerId());
+        PlayerLook look = selfLook(a);
         look.held = held;
         look.attacking = now - a.swingStart < 0.15;
         look.walkPhase = self.phase;
@@ -762,7 +892,7 @@ int main(int argc, char** argv) {
                       ? static_cast<float>((now - a.swingStart) / 0.12)
                       : 0.0f;
         a.renderer.drawViewModel(heldStack, swing, now - a.lastMuzzle < 0.05, self.phase,
-                                 a.net.predicted().onGround ? self.amount : 0.0f, a.aimT, a.scoped);
+                                 a.net.predicted().onGround ? self.amount : 0.0f, a.aimT, a.scoped, selfLook(a));
       }
     } else {
       // Menu background: slowly look around the island.
@@ -771,6 +901,7 @@ int main(int argc, char** argv) {
       cam.eye = eye;
       cam.yaw = static_cast<float>(now * 0.04);
       cam.pitch = -0.12f;
+      a.audio.setAmbience(0.4f * a.ambienceVolume, 0.3f * a.ambienceVolume, 0.35f * a.ambienceVolume, 0.0f, static_cast<float>(frameDt));  // quiet island air behind the menu
       a.renderer.beginFrame(cam, static_cast<float>(now), 17.2f);  // golden hour for the menu
       a.renderer.drawWorld(menuTerrain, eye, noDepleted, 1);
     }
@@ -787,6 +918,7 @@ int main(int argc, char** argv) {
       case Screen::Connecting: uiConnecting(a); break;
       case Screen::InGame: uiInGame(a); break;
     }
+    if (a.settingsOpen) uiSettings(a);
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(a.window);

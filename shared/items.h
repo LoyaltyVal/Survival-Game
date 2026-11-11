@@ -30,22 +30,33 @@ enum class Item : uint16_t {
   Arrow, Shells,
   HoloSight, Scope4x, Scope8x, Silencer, MuzzleBrake, VerticalGrip, LaserSight,
   LargeBox, SmallStash, CodeLock, LandClaim, SheetMetalDoor, ArmoredDoor, Explosives, PipeBomb, ExplosiveCharge,
+  // --- added in 0.5: clothing and armour ---
+  ClothHood, WoodHelmet, MetalHelmet,
+  ClothShirt, WoodChestplate, MetalChestplate,
+  ClothPants, WoodLegGuards, PlatedPants,
+  Boots, ArmoredBoots,
   Count
 };
 constexpr size_t kItemCount = static_cast<size_t>(Item::Count);
 
-enum class ItemKind : uint8_t { Resource, Food, Medical, Tool, Gun, Ammo, Deployable, Builder, Attachment, Explosive, Lock };
+enum class ItemKind : uint8_t { Resource, Food, Medical, Tool, Gun, Ammo, Deployable, Builder, Attachment, Explosive, Lock, Armor };
 
 // Sound effects. Also sent over the network, so append only.
 enum class Sound : uint8_t {
   None, Bow, Revolver, Pistol, SMG, Shotgun, AssaultRifle, HuntingRifle, Sniper, Silenced,
   Reload, DryFire, Swing, HitWood, HitStone, HitFlesh, Hitmarker, Headshot, Kill,
-  Build, Door, Pickup, Footstep, Explosion, Beep, Unlock, Denied, Count
+  Build, Door, Pickup, Footstep, Explosion, Beep, Unlock, Denied, HitArmor, Equip,
+  StepWood, StepMetal, Swim, AmbWind, AmbOcean, AmbBirds, AmbNight,
+  StepGrass, StepSand, StepRock, StepSnow, Count
 };
 const char* soundName(Sound s);  // file name without extension, e.g. "gun_pistol"
 
 // Attachment slots on a gun.
 enum class ModSlot : uint8_t { Sight = 0, Muzzle = 1, Grip = 2 };
+// Where a piece of clothing/armour is worn. Also the body zone a hit lands on.
+enum class ArmorSlot : uint8_t { Head = 0, Chest = 1, Legs = 2, Feet = 3 };
+constexpr int kArmorSlots = 4;
+
 enum ModSlotBits : uint8_t { kModSight = 1, kModMuzzle = 2, kModGrip = 4, kModScopes = 8 };
 
 struct ItemDef {
@@ -86,6 +97,11 @@ struct ItemDef {
   float blastDamage = 0;   // to the building piece it is stuck to (falls off with distance)
   float blastRadius = 0;
   float fuse = 0;          // seconds
+  // clothing / armour (ItemStack::data counts the wear it has soaked up)
+  ArmorSlot armorSlot = ArmorSlot::Chest;
+  float armorBullet = 0;   // fraction of bullet/arrow damage absorbed on that body zone
+  float armorMelee = 0;    // fraction of melee damage absorbed
+  uint16_t durability = 0; // damage points absorbed before it breaks
 };
 
 // Item::None returns the "Hands" definition (punching).
@@ -95,7 +111,7 @@ inline bool validItem(uint16_t raw) { return raw < kItemCount; }
 struct ItemStack {
   Item item = Item::None;
   uint16_t count = 0;
-  uint16_t data = 0;  // guns: rounds in the magazine
+  uint16_t data = 0;  // guns: rounds in the magazine; armour: wear taken
   uint16_t mods = 0;  // guns: attachments, 3 bits per slot (see modAt)
   bool empty() const { return item == Item::None || count == 0; }
 };
@@ -121,7 +137,21 @@ void recoilKick(Item gun, int shotIndex, float& yawDeg, float& pitchDeg);
 
 constexpr int kHotbarSlots = 6;
 constexpr int kInventorySlots = 36;  // 0-5 hotbar, 6-35 main grid
+constexpr int kWearFirst = kInventorySlots;                 // 36-39: head, chest, legs, feet
+constexpr int kPlayerSlots = kInventorySlots + kArmorSlots;  // a player's whole inventory
+constexpr int kLootBagSlots = 42;    // a dropped body holds everything a player carried
 constexpr int kAutoSlot = 255;       // "first slot that fits"
+
+// A player inventory (kPlayerSlots long) ends with the clothing slots. Only
+// armour for that body part goes there, and addItem never fills them.
+bool isWearSlot(const Slots& s, int slot);
+bool slotAccepts(const Slots& s, int slot, Item item);
+inline int wearSlot(ArmorSlot a) { return kWearFirst + static_cast<int>(a); }
+// What is worn in that slot of a player inventory (None if nothing or not a player inventory).
+Item wornAt(const Slots& inv, ArmorSlot a);
+// Compact armour id for snapshots: 0 = nothing, else offset from the first armour item.
+uint8_t armorCode(Item item);
+Item armorFromCode(uint8_t code);
 
 int countItem(const Slots& s, Item item);
 // Adds into existing stacks first, then empty slots in [lo, hi). Returns how many did NOT fit.

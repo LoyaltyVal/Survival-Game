@@ -134,7 +134,17 @@ class NetClient {
     float pitch;
     Item held;
     uint8_t flags;
+    std::array<Item, kArmorSlots> wear;
   };
+  // Proximity voice: send 40 ms of microphone audio (kVoiceFrameSamples at kVoiceRate).
+  void sendVoice(const int16_t* pcm, size_t samples);
+  struct VoiceChunk {
+    uint32_t speaker;
+    std::vector<int16_t> pcm;
+  };
+  // Voice received since the last call (from players near you).
+  std::vector<VoiceChunk> takeVoice();
+
   // Other players interpolated at (now - kInterpDelay).
   std::vector<RemotePlayer> remotePlayers(double now) const;
 
@@ -178,7 +188,11 @@ class NetClient {
 
   ReliableChannel reliable_;
   Vitals vitals_;
-  Slots inventory_ = Slots(kInventorySlots);
+  Slots inventory_ = Slots(kPlayerSlots);
+  std::vector<VoiceChunk> voiceIn_;
+  uint16_t voiceSeq_ = 0;
+  int16_t voicePred_ = 0;
+  uint8_t voiceIndex_ = 0;
   World world_;
   std::unordered_set<uint32_t> depleted_;
   uint32_t nodesVersion_ = 1;

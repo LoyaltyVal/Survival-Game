@@ -199,16 +199,125 @@ std::vector<float> knock(float f1, float f2, float noiseHz, float noiseDecay, ui
   return v;
 }
 
+// Seamless loop: the last `fade` seconds are blended into the start, then cut off.
+void makeLoop(std::vector<float>& v, float fade) {
+  size_t f = static_cast<size_t>(fade * kRate);
+  if (v.size() <= 2 * f) return;
+  size_t n = v.size() - f;
+  for (size_t i = 0; i < f; ++i) {
+    float t = static_cast<float>(i) / static_cast<float>(f);
+    v[i] = v[i] * std::sqrt(t) + v[n + i] * std::sqrt(1 - t);
+  }
+  v.resize(n);
+}
+
+std::vector<float> ambWind() {
+  auto v = buffer(13.0f);
+  Rng r{70};
+  float z1 = 0, z2 = 0;
+  for (size_t i = 0; i < v.size(); ++i) {
+    float t = timeOf(i), n = r.next();
+    float gust = 0.55f + 0.3f * std::sin(t * 0.7f) + 0.15f * std::sin(t * 1.9f + 1.3f);
+    float a = std::exp(-kTau * (250.0f + 350.0f * gust) / kRate);  // brighter in gusts
+    z1 = n * (1 - a) + z1 * a;
+    z2 = z1 * (1 - a) + z2 * a;
+    v[i] = z2 * gust * 3.0f;
+  }
+  makeLoop(v, 1.0f);
+  normalize(v, 0.5f);
+  return v;
+}
+
+std::vector<float> ambOcean() {
+  auto v = buffer(17.0f);  // a wave every ~5.3 s
+  Rng r{71};
+  LowPass roar(380), roar2(200), fizz(5000), fizzLo(1500);
+  for (size_t i = 0; i < v.size(); ++i) {
+    float t = timeOf(i), n = r.next();
+    float ph = std::fmod(t, 5.33f) / 5.33f;
+    float swell = std::pow(std::sin(ph * 3.14159f), 2.0f);
+    float breakAt = std::max(0.0f, std::sin((ph - 0.35f) * 3.14159f / 0.65f));  // the break and wash after the crest
+    v[i] = roar2(roar(n)) * (0.4f + 1.4f * swell) * 2.5f + (fizz(n) - fizzLo(n)) * breakAt * breakAt * 0.5f;
+  }
+  makeLoop(v, 1.0f);
+  normalize(v, 0.55f);
+  return v;
+}
+
+std::vector<float> ambBirds() {
+  auto v = buffer(15.0f);
+  Rng r{72};
+  auto u01 = [&]() { return r.next() * 0.5f + 0.5f; };
+  // A few songbirds: short whistled phrases at random times.
+  for (int k = 0; k < 14; ++k) {
+    float start = u01() * 13.0f;
+    float base = 2600.0f + 1800.0f * u01();
+    int notes = 2 + static_cast<int>(u01() * 5);
+    float gain = 0.15f + 0.25f * u01();
+    for (int nn = 0; nn < notes; ++nn) {
+      float ns = start + static_cast<float>(nn) * 0.11f, len = 0.07f + 0.04f * u01();
+      float sweep = r.next() * 900.0f;
+      float phase = 0;
+      for (size_t i = static_cast<size_t>(ns * kRate); i < v.size() && i < static_cast<size_t>((ns + len) * kRate); ++i) {
+        float t = timeOf(i) - ns, u = t / len;
+        float f = base + sweep * u + 120.0f * std::sin(t * kTau * 38.0f);
+        phase += kTau * f / kRate;
+        v[i] += std::sin(phase) * std::sin(u * 3.14159f) * gain;
+      }
+    }
+  }
+  echoes(v, {{0.09f, 0.25f}, {0.21f, 0.12f}});
+  makeLoop(v, 1.0f);
+  normalize(v, 0.35f);
+  return v;
+}
+
+std::vector<float> ambNight() {
+  auto v = buffer(9.0f);
+  Rng r{73};
+  // Crickets: trains of ~4.5 kHz pulses, several insects slightly out of step.
+  for (int bug = 0; bug < 4; ++bug) {
+    float f = 4300.0f + 500.0f * static_cast<float>(bug), period = 0.55f + 0.13f * static_cast<float>(bug);
+    float offset = 0.17f * static_cast<float>(bug), gain = 0.25f / (1 + static_cast<float>(bug) * 0.4f);
+    for (size_t i = 0; i < v.size(); ++i) {
+      float t = timeOf(i) + offset;
+      float inChirp = std::fmod(t, period);
+      if (inChirp > 0.18f) continue;
+      float pulse = std::sin(std::fmod(inChirp, 0.045f) / 0.045f * 3.14159f);
+      v[i] += std::sin(kTau * f * t) * pulse * pulse * gain;
+    }
+  }
+  LowPass lp(300);
+  for (size_t i = 0; i < v.size(); ++i) v[i] += lp(r.next()) * 0.25f;  // soft night air
+  makeLoop(v, 0.6f);
+  normalize(v, 0.3f);
+  return v;
+}
+
 std::vector<float> synth(Sound s) {
   std::vector<float> v;
   switch (s) {
     case Sound::Pistol: v = gunshot({1.0f, 2600, 0.032f, 115, 0.6f, 0.26f, 0.9f}, 10); break;
     case Sound::Revolver: v = gunshot({1.0f, 1800, 0.05f, 85, 0.95f, 0.42f, 1.2f}, 11); break;
     case Sound::SMG: v = gunshot({0.85f, 3100, 0.022f, 135, 0.45f, 0.18f, 0.55f}, 12); break;
-    case Sound::Shotgun: v = gunshot({0.75f, 1100, 0.085f, 65, 1.1f, 0.55f, 1.4f}, 13); break;
+    case Sound::Shotgun:  // blast, then the pump racked back and forward
+      v = gunshot({0.75f, 1100, 0.085f, 65, 1.1f, 0.55f, 1.4f}, 13);
+      addClick(v, 0.52f, 900, 0.35f, 50);
+      addClick(v, 0.66f, 1300, 0.4f, 51);
+      break;
     case Sound::AssaultRifle: v = gunshot({1.0f, 2200, 0.038f, 100, 0.8f, 0.34f, 0.9f}, 14); break;
-    case Sound::HuntingRifle: v = gunshot({1.0f, 1600, 0.06f, 80, 1.0f, 0.65f, 1.5f}, 15); break;
-    case Sound::Sniper: v = gunshot({1.0f, 1350, 0.07f, 62, 1.1f, 0.95f, 2.0f}, 16); break;
+    case Sound::HuntingRifle:  // shot, then the bolt cycled
+      v = gunshot({1.0f, 1600, 0.06f, 80, 1.0f, 0.65f, 1.5f}, 15);
+      addClick(v, 0.62f, 2400, 0.22f, 52);
+      addClick(v, 0.74f, 1700, 0.25f, 53);
+      addClick(v, 0.9f, 2100, 0.25f, 54);
+      break;
+    case Sound::Sniper:
+      v = gunshot({1.0f, 1350, 0.07f, 62, 1.1f, 0.95f, 2.0f}, 16);
+      addClick(v, 1.0f, 2300, 0.18f, 55);
+      addClick(v, 1.13f, 1600, 0.2f, 56);
+      addClick(v, 1.32f, 2000, 0.2f, 57);
+      break;
     case Sound::Silenced: v = silencedShot(); break;
     case Sound::Bow: v = bowShot(); break;
     case Sound::Explosion: v = explosion(); break;
@@ -295,6 +404,103 @@ std::vector<float> synth(Sound s) {
       }
       break;
     }
+    case Sound::StepWood: {  // hollow knock of boots on planks
+      v = knock(140, 260, 900, 0.012f, 60, 0.18f);
+      for (size_t i = 0; i < v.size(); ++i) v[i] *= std::exp(-timeOf(i) / 0.05f);
+      normalize(v, 0.45f);
+      break;
+    }
+    case Sound::StepMetal: {  // ringing deck plate
+      v = tones(0.4f, {{0, 520, 0.12f, 0.3f}, {0, 1310, 0.07f, 0.25f}, {0, 2870, 0.04f, 0.15f}});
+      auto k = knock(180, 330, 2500, 0.01f, 61, 0.4f);
+      for (size_t i = 0; i < v.size() && i < k.size(); ++i) v[i] += k[i] * 0.5f;
+      normalize(v, 0.45f);
+      break;
+    }
+    case Sound::Swim: {  // a stroke: slosh and trickle
+      v = buffer(0.7f);
+      Rng r{62};
+      LowPass lo(900), hi(4000);
+      for (size_t i = 0; i < v.size(); ++i) {
+        float t = timeOf(i), n = r.next();
+        float env = std::sin(std::min(1.0f, t / 0.5f) * 3.14159f);
+        float bubbles = std::sin(kTau * (600 + 900 * std::fabs(r.next())) * t) * (r.next() > 0.97f ? 1.0f : 0.0f);
+        v[i] = lo(n) * env * 1.6f + (hi(n) - lo(n)) * env * env * 0.4f + bubbles * 0.15f * env;
+      }
+      normalize(v, 0.45f);
+      break;
+    }
+    case Sound::StepGrass: {  // boot through grass: a soft heel, then blades swishing and a few snapping stems
+      v = buffer(0.3f);
+      Rng r{80};
+      LowPass hi(6500), lo(1400), heel(220);
+      for (size_t i = 0; i < v.size(); ++i) {
+        float t = timeOf(i), n = r.next();
+        float swish = (hi(n) - lo(n)) * std::exp(-t / 0.07f) * std::min(1.0f, t / 0.012f);
+        v[i] = heel(n) * std::exp(-t / 0.02f) * 2.2f + swish * 1.4f;
+      }
+      for (int k = 0; k < 5; ++k) addClick(v, 0.01f + 0.017f * static_cast<float>(k), 3000.0f + 700.0f * static_cast<float>(k), 0.12f, 81u + k);
+      normalize(v, 0.42f);
+      break;
+    }
+    case Sound::StepSand: {  // soft, dull and gritty: grains shifting under the foot, no click
+      v = buffer(0.32f);
+      Rng r{85};
+      LowPass lp(2600), lp2(500), sub(160);
+      float grain = 0;
+      for (size_t i = 0; i < v.size(); ++i) {
+        float t = timeOf(i), n = r.next();
+        if (i % 60 == 0) grain = 0.4f + 0.6f * std::fabs(r.next());  // granular flutter
+        float body = (lp(n) - lp2(n)) * grain * std::exp(-t / 0.09f) * std::min(1.0f, t / 0.03f);
+        v[i] = body * 1.8f + sub(n) * std::exp(-t / 0.05f) * 1.2f;
+      }
+      normalize(v, 0.38f);
+      break;
+    }
+    case Sound::StepRock: {  // hard heel tap on stone, then a scrape of loose gravel
+      v = knock(420, 980, 5200, 0.006f, 86, 0.28f);
+      for (size_t i = 0; i < v.size(); ++i) v[i] *= std::exp(-timeOf(i) / 0.035f);
+      for (int k = 0; k < 7; ++k)
+        addClick(v, 0.02f + 0.011f * static_cast<float>(k), 2200.0f + 450.0f * static_cast<float>(k % 4), 0.18f, 87u + k);
+      normalize(v, 0.45f);
+      break;
+    }
+    case Sound::StepSnow: {  // packed-snow crunch: dense little crackles with a squeak
+      v = buffer(0.35f);
+      Rng r{95};
+      LowPass lp(3500), lo(700);
+      for (size_t i = 0; i < v.size(); ++i) {
+        float t = timeOf(i), n = r.next();
+        float env = std::sin(std::min(1.0f, t / 0.2f) * 3.14159f);
+        float crackle = (r.next() > 0.82f ? 1.0f : 0.15f) * (lp(n) - lo(n));
+        v[i] = crackle * env * 1.6f + std::sin(kTau * 900.0f * t) * env * env * 0.05f;
+      }
+      normalize(v, 0.42f);
+      break;
+    }
+    case Sound::AmbWind: v = ambWind(); break;
+    case Sound::AmbOcean: v = ambOcean(); break;
+    case Sound::AmbBirds: v = ambBirds(); break;
+    case Sound::AmbNight: v = ambNight(); break;
+    case Sound::HitArmor: {  // bullet glancing off a plate: metallic ping over a dull thud
+      v = tones(0.35f, {{0, 3100, 0.09f, 0.45f}, {0, 4700, 0.05f, 0.25f}, {0.003f, 7300, 0.03f, 0.12f}});
+      auto thud = knock(220, 400, 1800, 0.012f, 39, 0.3f);
+      for (size_t i = 0; i < v.size() && i < thud.size(); ++i) v[i] += thud[i] * 0.5f;
+      normalize(v, 0.6f);
+      break;
+    }
+    case Sound::Equip: {  // cloth rustle and a buckle
+      v = buffer(0.35f);
+      Rng r{41};
+      LowPass hi(2500), lo(500);
+      for (size_t i = 0; i < v.size(); ++i) {
+        float n = r.next(), t = timeOf(i);
+        v[i] = (hi(n) - lo(n)) * std::sin(std::min(1.0f, t / 0.3f) * 3.14159f) * (0.6f + 0.4f * std::sin(t * 55.0f));
+      }
+      addClick(v, 0.27f, 2200, 0.5f, 42);
+      normalize(v, 0.45f);
+      break;
+    }
     default:
       v = buffer(0.05f);
       break;
@@ -304,8 +510,24 @@ std::vector<float> synth(Sound s) {
 
 }  // namespace
 
-bool writeSoundFile(Sound s, const std::string& path) {
-  std::vector<float> v = synth(s);
+static bool writeWav(const std::vector<float>& v, const std::string& path);
+
+bool writeSoundFile(Sound s, const std::string& path) { return writeWav(synth(s), path); }
+
+bool hasFarVariant(Sound s) { return (s >= Sound::Bow && s <= Sound::Silenced) || s == Sound::Explosion; }
+
+// A shot heard from far away: the crack and highs are gone, and it rolls back off the hills.
+bool writeFarSoundFile(Sound s, const std::string& path) {
+  std::vector<float> nearShot = synth(s);
+  std::vector<float> v(nearShot.size() + static_cast<size_t>(1.8f * kRate), 0.0f);
+  LowPass a(650), b(500), c(380);
+  for (size_t i = 0; i < v.size(); ++i) v[i] = c(b(a(i < nearShot.size() ? nearShot[i] : 0.0f)));
+  echoes(v, {{0.28f, 0.45f}, {0.6f, 0.35f}, {0.95f, 0.25f}, {1.4f, 0.15f}});
+  normalize(v, 0.8f);
+  return writeWav(v, path);
+}
+
+static bool writeWav(const std::vector<float>& v, const std::string& path) {
   std::ofstream f(path, std::ios::binary);
   if (!f) return false;
   auto u32 = [&](uint32_t x) { f.write(reinterpret_cast<const char*>(&x), 4); };

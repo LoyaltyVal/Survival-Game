@@ -37,6 +37,7 @@ add_library(sg_shared STATIC
   shared/terrain.cpp
   shared/net_client.cpp
   shared/upnp.cpp
+  shared/adpcm.cpp
 )
 target_include_directories(sg_shared PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/shared)
 sg_warnings(sg_shared)
@@ -46,7 +47,7 @@ endif()
 
 # The server code is also linked into the client (solo / self-hosted servers)
 # and the tests, so build it once as a library.
-add_library(sg_server_lib STATIC server/server.cpp server/commands.cpp)
+add_library(sg_server_lib STATIC server/server.cpp server/commands.cpp server/monuments.cpp)
 target_include_directories(sg_server_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/server)
 target_link_libraries(sg_server_lib PUBLIC sg_shared)
 sg_warnings(sg_server_lib)
@@ -113,9 +114,11 @@ if(SG_BUILD_CLIENT)
     client/gl.cpp
     client/renderer.cpp
     client/meshes.cpp
+    client/character.cpp
     client/ui.cpp
     client/sfx.cpp
     client/audio.cpp
+    client/voice.cpp
   )
   target_link_libraries(sg_client PRIVATE sg_server_lib glfw imgui miniaudio_impl)
   target_compile_definitions(sg_client PRIVATE GLFW_INCLUDE_NONE)

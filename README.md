@@ -16,11 +16,11 @@ Custom C++ engine for an open-world survival game (gather, craft, build, PvE + P
 - **Building**: snap-grid foundations, walls, doorways, floors and stairs (Building Plan, R to change piece).
   Doors lock to their owner. A hammer upgrades pieces: twig → wood → stone → metal.
 - **Combat**: rock, hatchet, pickaxe, pistol, hunting rifle. Hitscan guns, headshots ×2, server-side lag
-  compensation. Death drops a loot bag; respawn on a beach or at your sleeping bag.
+  compensation. Death leaves a **body bag** with everything you carried; respawn on a beach or at your sleeping bag.
 - **Survival stats**: health, food, saturation (a buffer that drains before food), stamina (sprinting and
   jumping cost it; starving halves regen). Well fed = slow healing; starving = slow death.
 - **Saving**: each server saves its world to `world_<port>.sav` every 30 s, whenever a player leaves, and on
-  shutdown: buildings, doors, boxes and their contents, loot bags, used-up resources (with respawn timers),
+  shutdown: buildings, doors, boxes and their contents, body bags, used-up resources (with respawn timers),
   and every player's position, health, food, inventory and unfinished crafts (by name until Steam login).
 - **Graphics**: sun shadows, procedural sky with sun and drifting clouds, see-through animated water with
   reflections, low-poly broadleaf and pine trees, lumpy rocks with ore veins and moss, wind-blown grass and
@@ -50,6 +50,28 @@ Custom C++ engine for an open-world survival game (gather, craft, build, PvE + P
 - **Sound**: 3D positional audio (miniaudio): every gun has its own synthesized report with echoes, silenced
   shots, bow, reloads, dry fire, hit markers, chopping/mining, footsteps, doors, building, explosions, keypad beeps.
   The sounds are written to `sounds/*.wav` on first run; replace any file with your own recording to change it.
+  Distant gunfire is a muffled boom with rolling echoes (`*_far.wav`), bolt-action rifles and the shotgun cycle
+  after each shot, footsteps sound like grass, wood or metal, and there is ambience: wind (stronger up high),
+  surf near the coast, birds by day, crickets at night. (When the built-in sounds change, `sounds/version.txt`
+  makes the game rewrite them once; copy your own files back in after.)
+
+- **Proximity voice chat**: hold **V** (or pick open mic in Settings > Voice). Players within 45 m hear you from where
+  you stand, quieter with distance; a speaker icon shows who is talking. 16 kHz voice, ~8 kB/s per speaker, relayed by
+  the server only to people in range (muted players can't talk).
+- **Footsteps** match the ground: grass, sand, rock and steep slopes, snow, wooden or stone floors, metal decks, water.
+- **Players**: jointed human characters with faces, ears, hands, shoes and a walk/run cycle; everyone gets their own
+  skin tone, hair style and colour, beard or not, and T-shirt and jeans colours. Arms reach for the gun's grip and
+  foregrip (IK), heads look where they aim.
+- **Clothing and armor** (Tab: the Clothing panel; right-click a piece or hold it and click to wear it): Cloth Hood /
+  Shirt / Pants, Boots; Wooden Helmet, Chestplate, Leg Guards; Metal Helmet, Chestplate, Plated Pants, Armored Boots.
+  Everything you wear shows on your character for everyone. Hits land on a body zone (head x2, chest, legs x0.75,
+  feet x0.6); the armor there soaks part of it (separately for bullets and melee) and wears out until it breaks.
+  Hard armor pings when you shoot it.
+- **Oil rigs**: a Small and a Large Oil Rig out at sea (`/rigs` says where). Swim out (Shift swims faster), climb
+  the ladder (W), take the stairs up the decks to the control room. Military crates hold guns, attachments, armor,
+  HQ metal and explosives and refill every 20 minutes. Rigs can't be damaged or built on.
+- **Realism**: you swim in deep water (head above the surface), fall damage from more than ~4 m (water breaks a
+  fall), bullets stop at tree trunks, rocks and walls, and explosions don't hurt players fully behind cover.
 
 ## Playing with friends
 
@@ -129,8 +151,9 @@ shared/      used by client AND server, so they can never disagree
   terrain.*      deterministic island heightmap
 server/      authoritative server: all game rules, saving
 client/      main.cpp (loop, input), ui.cpp (menus, HUD, inventory), renderer.* (shadows, sky, water),
-             meshes.* (procedural models), gl.*
-tests/       tests.cpp (259 checks), bot.cpp
+             meshes.* (procedural models), character.* (player body + armor models), sfx/audio (sound), gl.*
+server/monuments.cpp  oil rigs and their loot
+tests/       tests.cpp (325 checks), bot.cpp
 ```
 
 ## Verified
@@ -146,5 +169,5 @@ tests/       tests.cpp (259 checks), bot.cpp
 1. Tool cupboard (building privilege) and team system (up to 10)
 2. Raid windows, offline protection, new-player shield, PvE coast zones
 3. Animals (food from hunting), thirst, furnace with smelting time
-4. Bow and arrows (projectiles), reloading and magazines
+4. Boats, more monuments (radar station, harbour), heli patrols
 5. Stability for building pieces; terrain LOD chunks; real art

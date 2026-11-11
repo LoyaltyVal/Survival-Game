@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "net.h"
@@ -13,6 +14,7 @@
 #include "server.h"
 #include "sfx.h"
 #include "upnp.h"
+#include "voice.h"
 #include "world.h"
 
 struct GLFWwindow;
@@ -47,9 +49,29 @@ struct App {
   float fps = 0;
   bool quit = false;
 
-  // settings (saved to settings.txt)
+  // settings (saved to settings.txt, changed in the Settings window)
   char playerName[21] = "Survivor";
   float mouseSensitivity = 1.0f;
+  bool invertY = false;
+  float fov = 75.0f;           // degrees, vertical
+  bool fullscreen = false;
+  bool vsync = true;
+  bool showFps = true;
+  float ambienceVolume = 1.0f; // wind, waves, birds, crickets
+  float voiceVolume = 1.0f;    // other players talking
+  float micGain = 1.0f;
+  int voiceMode = 1;           // 0 off, 1 push to talk (V), 2 open mic
+  float voiceThreshold = 0.04f;  // open mic: how loud before it transmits
+  bool settingsOpen = false;
+  int windowedX = 100, windowedY = 100, windowedW = 1600, windowedH = 900;  // restored when leaving fullscreen
+
+  // proximity voice chat
+  Microphone mic;
+  bool micFailed = false;
+  bool micTest = false;        // the Settings voice tab is showing its level meter
+  bool transmitting = false;
+  double voiceHold = 0;        // open mic keeps sending a moment after you stop talking
+  std::unordered_map<uint32_t, double> speaking;  // player id -> last time we heard them
 
   // server browser
   std::vector<ServerEntry> servers;
@@ -69,8 +91,8 @@ struct App {
     std::atomic<bool> running{false};
   };
   std::vector<std::unique_ptr<HostedServer>> hosted;
-  bool noUpnp = false;
-  bool noHost = false;                  // --host off: don't host the listed local worlds                  // --upnp off: don't touch the router
+  bool noUpnp = false;                  // --upnp off: don't touch the router
+  bool noHost = false;                  // --host off: don't host the listed local worlds
   PortForwarder forwarder;              // opens the hosted ports on the router for internet friends
   std::vector<std::string> lanAddresses;  // this PC's address on the home network
 
@@ -147,6 +169,8 @@ void joinServer(App& app, const ServerEntry& entry);
 void addServer(App& app, const std::string& name, const std::string& address);
 void removeServer(App& app, int index);
 void leaveServer(App& app, const std::string& error = "");
+void applyVideo(App& app);   // fullscreen / vsync from the settings
+void saveSettings(const App& app);
 
 // ui.cpp
 void uiSetup(App& app, float contentScale);
@@ -154,5 +178,6 @@ void uiMainMenu(App& app);
 void uiServerBrowser(App& app);
 void uiConnecting(App& app);
 void uiInGame(App& app);
+void uiSettings(App& app);  // drawn over the menu or the game while settingsOpen
 
 }  // namespace sg

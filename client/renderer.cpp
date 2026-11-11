@@ -301,6 +301,7 @@ void main() {
   float diff = max(ndl, 0.0);
   bool foliage = (m == 7 || m == 8 || m == 14 || m == 15);
   if (foliage) diff = max(ndl * 0.6 + 0.4, 0.0);  // soft wrap-around light through leaves
+  if (m == 13) diff = max(ndl * 0.8 + 0.2, 0.0) * 0.95;  // skin: light bleeds a little past the terminator
   vec3 amb = mix(uGroundAmb, uSkyAmb, n.y * 0.5 + 0.5);
   if (m == 8) amb *= mix(0.5, 1.0, vSway);
   vec3 col = albedo * (uLightColor * diff * sh + amb);
@@ -542,6 +543,19 @@ bool Renderer::init() {
     mb.quad({lo, y, lo}, {lo, y, hi}, {hi, y, hi}, {hi, y, lo}, {1, 1, 1}, kMatWater);
     upload(water_, mb);
   }
+  for (int i = 0; i < kBodyMeshes; ++i) {  // the player character
+    MeshBuilder mb;
+    buildBodyMesh(static_cast<BodyMesh>(i), Mat4::identity(), mb);
+    if (!mb.idx.empty()) upload(body_[static_cast<size_t>(i)], mb);
+  }
+  for (size_t i = 1; i < kItemCount; ++i) {
+    if (itemDef(static_cast<Item>(i)).kind != ItemKind::Armor) continue;
+    for (int p = 0; p < kBodyParts; ++p) {
+      MeshBuilder mb;
+      buildArmorMesh(static_cast<Item>(i), static_cast<BodyPart>(p), Mat4::identity(), mb);
+      if (!mb.idx.empty()) upload(armor_[i][static_cast<size_t>(p)], mb);
+    }
+  }
   renderItemIcons();
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -551,6 +565,9 @@ bool Renderer::init() {
 void Renderer::shutdown() {
   for (Mesh* m : {&terrain_, &props_, &grass_, &water_, &box_, &objects_, &blob_, &sphere_}) destroy(*m);
   for (auto& m : items_) destroy(m);
+  for (auto& m : body_) destroy(m);
+  for (auto& parts : armor_)
+    for (auto& m : parts) destroy(m);
   for (auto& t : icons_)
     if (t) glDeleteTextures(1, &t);
   for (GLuint* t : {&shadowTex_, &heightTex_})
@@ -795,65 +812,195 @@ void Renderer::drawGhost(const WorldObject& o, bool valid) {
 }
 
 namespace {
-const Vec3 kSkin{0.32f, 0.17f, 0.10f};
-const Vec3 kPants{0.06f, 0.06f, 0.075f};
-const Vec3 kBoots{0.04f, 0.03f, 0.02f};
-const Vec3 kHair{0.05f, 0.03f, 0.015f};
-const Vec3 kSleeve{0.16f, 0.12f, 0.07f};
 const Vec3 kFlash{7.0f, 4.5f, 1.6f};
+const Vec3 kBurlapSleeve{0.33f, 0.26f, 0.16f};
 constexpr float kHalfPi = kPi * 0.5f;
+
+Vec3 posOf(const Mat4& m) { return {m.at(0, 3), m.at(1, 3), m.at(2, 3)}; }
+Mat4 rotOnly(Mat4 m) {
+  m.at(0, 3) = m.at(1, 3) = m.at(2, 3) = 0;
+  return m;
+}
+Vec3 dirOf(const Mat4& m, const Vec3& d) { return posOf(rotOnly(m) * Mat4::translate(d)); }
+
+// Bone frame at `from` whose -Y axis points at `to`; the bone's front (-Z) faces roughly `fwd`.
+Mat4 boneFrame(const Vec3& from, const Vec3& to, const Vec3& fwd) {
+  Vec3 y = normalize(from - to);
+  Vec3 z = fwd * -1.0f;
+  z = z - y * dot(z, y);
+  if (dot(z, z) < 1e-6f) z = std::fabs(y.y) < 0.9f ? Vec3{0, 1, 0} : Vec3{0, 0, 1};
+  z = normalize(z);
+  Vec3 x = cross(y, z);
+  Mat4 m;
+  m.at(0, 0) = x.x; m.at(1, 0) = x.y; m.at(2, 0) = x.z;
+  m.at(0, 1) = y.x; m.at(1, 1) = y.y; m.at(2, 1) = y.z;
+  m.at(0, 2) = z.x; m.at(1, 2) = z.y; m.at(2, 2) = z.z;
+  m.at(0, 3) = from.x; m.at(1, 3) = from.y; m.at(2, 3) = from.z;
+  return m;
+}
+
+// Two-bone IK: where the elbow goes for a limb from s reaching t, bending towards `pole`.
+Vec3 ikJoint(const Vec3& s, const Vec3& t, float l1, float l2, const Vec3& pole) {
+  Vec3 d = t - s;
+  float len = clampf(length(d), 0.05f, (l1 + l2) * 0.999f);
+  Vec3 u = normalize(d);
+  float cosA = clampf((l1 * l1 + len * len - l2 * l2) / (2 * l1 * len), -1.0f, 1.0f);
+  float sinA = std::sqrt(std::max(0.0f, 1 - cosA * cosA));
+  Vec3 v = pole - u * dot(pole, u);
+  if (dot(v, v) < 1e-6f) v = std::fabs(u.y) < 0.9f ? Vec3{0, -1, 0} : Vec3{1, 0, 0};
+  v = normalize(v);
+  return s + (u * cosA + v * sinA) * l1;
+}
+
+uint32_t lookHash(uint32_t x) {
+  x ^= x >> 16;
+  x *= 0x7feb352d;
+  x ^= x >> 15;
+  x *= 0x846ca68b;
+  x ^= x >> 16;
+  return x;
+}
 }  // namespace
+
+PlayerLook lookFor(uint32_t id) {
+  static const Vec3 skins[] = {{0.42f, 0.25f, 0.16f}, {0.36f, 0.21f, 0.13f}, {0.30f, 0.17f, 0.10f}, {0.22f, 0.12f, 0.07f}, {0.13f, 0.07f, 0.04f}};
+  static const Vec3 hairs[] = {{0.025f, 0.02f, 0.018f}, {0.07f, 0.04f, 0.02f}, {0.14f, 0.08f, 0.04f},
+                               {0.38f, 0.28f, 0.14f},   {0.30f, 0.12f, 0.04f}, {0.25f, 0.25f, 0.25f}};
+  static const Vec3 shirts[] = {{0.55f, 0.12f, 0.08f}, {0.10f, 0.25f, 0.55f}, {0.45f, 0.38f, 0.10f}, {0.20f, 0.40f, 0.20f},
+                                {0.40f, 0.15f, 0.40f}, {0.10f, 0.40f, 0.42f}, {0.55f, 0.55f, 0.52f}, {0.06f, 0.06f, 0.065f}};
+  static const Vec3 pants[] = {{0.06f, 0.09f, 0.16f}, {0.25f, 0.21f, 0.13f}, {0.04f, 0.04f, 0.045f}, {0.10f, 0.12f, 0.06f}, {0.12f, 0.12f, 0.13f}};
+  auto pick = [&](uint32_t salt, uint32_t n) { return lookHash(id * 0x9E3779B1u + salt) % n; };
+  PlayerLook l;
+  l.skin = skins[pick(1, 5)];
+  l.hair = hairs[pick(2, 6)];
+  l.shirt = shirts[pick(3, 8)];
+  l.pants = pants[pick(4, 5)];
+  l.hairStyle = static_cast<uint8_t>(pick(5, kHairStyles));
+  l.beard = pick(6, 3) == 0;
+  return l;
+}
+
+void Renderer::bodyPart(const Mesh& mesh, const Mat4& m, const Vec3& tint) {
+  if (mesh.count) opaque_.push_back({&mesh, m, tint, 1.0f, true});
+}
 
 void Renderer::drawPlayer(const Vec3& feet, float yaw, float pitch, const PlayerLook& look) {
   using M = Mat4;
-  // Rounded body parts: unit spheres stretched into limbs (radius = half the size given).
-  auto part = [&](const M& m, const Vec3& size, const Vec3& color) {
-    opaque_.push_back({&sphere_, m * M::scale(size * 0.5f), color, 1.0f, true});
-  };
-  M base = M::translate(feet) * M::rotateY(yaw);
-  float sw = std::sin(look.walkPhase) * 0.55f * look.walkAmount;
-  if (look.dead) {
-    base = M::translate(feet + Vec3{0, 0.14f, 0}) * M::rotateY(yaw) * M::rotateX(-kHalfPi) * M::translate({0, -0.9f, 0});
-    sw = 0;
-    pitch = 0;
-  }
-  for (float side : {-1.0f, 1.0f}) {
-    M hip = base * M::translate({side * 0.11f, 0.92f, 0}) * M::rotateX(side * sw);
-    part(hip * M::translate({0, -0.24f, 0}), {0.19f, 0.5f, 0.21f}, kPants);  // thigh
-    M knee = hip * M::translate({0, -0.46f, 0}) * M::rotateX(std::fabs(sw) * 0.6f);
-    part(knee * M::translate({0, -0.2f, 0}), {0.15f, 0.46f, 0.17f}, kPants);  // shin
-    box(opaque_, knee * M::translate({0, -0.42f, -0.04f}) * M::scale({0.15f, 0.1f, 0.26f}), kBoots);
-  }
-  part(base * M::translate({0, 0.98f, 0}), {0.40f, 0.26f, 0.24f}, kPants);  // hips
-  part(base * M::translate({0, 1.24f, 0}), {0.46f, 0.62f, 0.27f}, look.shirt);  // torso
-  part(base * M::translate({0, 1.46f, 0}), {0.52f, 0.18f, 0.26f}, look.shirt);  // shoulders
-  M neck = base * M::translate({0, 1.56f, 0}) * M::rotateX(pitch * 0.6f);
-  part(neck * M::translate({0, 0.03f, 0}), {0.11f, 0.12f, 0.11f}, kSkin);
-  part(neck * M::translate({0, 0.17f, 0}), {0.23f, 0.27f, 0.25f}, kSkin);  // head
-  part(neck * M::translate({0, 0.23f, 0.02f}), {0.245f, 0.2f, 0.26f}, kHair);
-  part(neck * M::translate({0, 0.15f, -0.12f}), {0.04f, 0.06f, 0.05f}, kSkin * 0.9f);  // nose
-  for (float side : {-1.0f, 1.0f}) part(neck * M::translate({side * 0.055f, 0.19f, -0.105f}), {0.035f, 0.025f, 0.02f}, {0.02f, 0.02f, 0.02f});
+  const bool detail = length(feet - cam_.eye) < 40.0f;
+  const bool dead = look.dead;
+  const float amt = dead ? 0.0f : clampf(look.walkAmount, 0.0f, 1.0f), ph = look.walkPhase;
+  const bool holding = look.held != Item::None && !dead;
+  const bool gun = holding && itemDef(look.held).kind == ItemKind::Gun;
+  if (dead) pitch = 0;
 
-  const bool holding = look.held != Item::None && !look.dead;
-  const ItemKind kind = itemDef(look.held).kind;
-  const bool gun = holding && kind == ItemKind::Gun;
-  // Right arm: forward and aimed when holding something, swinging otherwise.
-  float rightRot = holding ? kHalfPi + pitch + (look.attacking && !gun ? 0.7f : 0.0f) : -sw;
-  M rs = base * M::translate({0.3f, 1.44f, 0}) * M::rotateX(rightRot);
-  part(rs * M::translate({0, -0.16f, 0}), {0.14f, 0.36f, 0.15f}, look.shirt);
-  part(rs * M::translate({0, -0.42f, 0}), {0.11f, 0.32f, 0.12f}, look.shirt);
-  part(rs * M::translate({0, -0.6f, 0}), {0.1f, 0.11f, 0.1f}, kSkin);
-  float leftRot = gun ? kHalfPi + pitch : sw;
-  M ls = base * M::translate({-0.3f, 1.44f, 0}) * M::rotateX(leftRot) * M::rotateZ(gun ? -0.45f : 0.0f);
-  part(ls * M::translate({0, -0.16f, 0}), {0.14f, 0.36f, 0.15f}, look.shirt);
-  part(ls * M::translate({0, -0.42f, 0}), {0.11f, 0.32f, 0.12f}, look.shirt);
-  part(ls * M::translate({0, -0.6f, 0}), {0.1f, 0.11f, 0.1f}, kSkin);
+  // --- skeleton ---
+  M root = M::translate(feet) * M::rotateY(yaw);
+  if (dead) root = M::translate(feet + Vec3{0, 0.13f, 0}) * M::rotateY(yaw) * M::rotateX(-kHalfPi) * M::translate({0, -0.95f, 0});
+  const float bob = -std::fabs(std::sin(ph)) * 0.035f * amt;
+  const float twist = std::sin(ph) * 0.09f * amt;
+  const M hips = root * M::translate({0, kWaistHeight + bob, 0}) * M::rotateY(twist);
+  const M torso = hips * M::rotateY(-twist * 1.8f) * M::rotateX(-0.13f * amt + (gun ? pitch * 0.2f : 0.0f));
+  const M head = torso * M::translate({0, kNeckHeight, 0}) * M::rotateX(pitch * (gun ? 0.45f : 0.65f) + 0.1f * amt);
+  const Vec3 fwd = dirOf(torso, {0, 0, -1});
+
+  M thigh[2], shin[2], foot[2], upper[2], fore[2], hand[2];
+  for (int i = 0; i < 2; ++i) {  // 0 = left, 1 = right (+X)
+    const float side = i == 0 ? -1.0f : 1.0f;
+    const float lp = ph + (i == 1 ? 0.0f : kPi);
+    float swing = std::sin(lp) * 0.55f * amt;
+    float knee = amt * (0.1f + 0.95f * std::max(0.0f, std::cos(lp))) + 0.04f;  // bends most while the leg swings forward
+    if (dead) swing = 0, knee = 0.05f;
+    thigh[i] = hips * M::translate({side * kHipX, kHipY, 0}) * M::rotateX(swing) * M::rotateZ(side * 0.025f);
+    shin[i] = thigh[i] * M::translate({0, -kThighLen, 0}) * M::rotateX(-knee);
+    foot[i] = shin[i] * M::translate({0, -kShinLen, 0}) * M::rotateX((knee - swing) * 0.8f);
+  }
+
+  // Hands reach for what is held (IK); empty hands swing with the stride.
+  bool ik[2] = {false, false};
+  Vec3 target[2];
+  M itemM;
+  const M aimRot = rotOnly(root) * M::rotateX(pitch);
+  if (gun) {
+    const GunMounts mt = gunMounts(look.held);
+    const bool pistol = look.held == Item::Pistol || look.held == Item::Revolver;
+    const M aim = M::translate(posOf(torso * M::translate({0, 0.36f, 0}))) * aimRot;
+    itemM = aim * M::translate(pistol ? Vec3{0.06f, -0.02f, -0.42f} : Vec3{0.13f, -0.06f, -0.22f});
+    target[1] = posOf(itemM * M::translate({0, 0.02f, 0.05f}));
+    float fz = pistol ? 0.02f : look.held == Item::Bow ? 0.0f : mt.grip.z + 0.06f;
+    target[0] = posOf(itemM * M::translate({-0.035f, -0.01f, fz}));
+    ik[0] = ik[1] = true;
+  } else if (holding) {
+    const float lift = look.attacking ? 1.0f : 0.0f;
+    const M aim = M::translate(posOf(torso * M::translate({0, 0.3f, 0}))) * rotOnly(root) * M::rotateX(pitch * 0.5f);
+    target[1] = posOf(aim * M::translate({0.2f, -0.14f + 0.16f * lift, -0.3f - 0.16f * lift}));
+    ik[1] = true;
+    itemM = M::translate(target[1]) * rotOnly(root) * M::rotateX(pitch * 0.5f - 0.25f - lift * 0.9f) * M::translate({0, -0.07f, -0.02f});
+  }
+  for (int i = 0; i < 2; ++i) {
+    const float side = i == 0 ? -1.0f : 1.0f;
+    const M shoulder = torso * M::translate({side * kShoulderX, kShoulderY, 0});
+    if (!ik[i]) {
+      const float lp = ph + (i == 1 ? 0.0f : kPi);
+      float swing = -std::sin(lp) * 0.5f * amt, elbow = 0.18f + 0.45f * amt;
+      if (dead) swing = 0.2f, elbow = 0.1f;
+      upper[i] = shoulder * M::rotateX(swing) * M::rotateZ(side * (0.07f + 0.04f * amt));
+      fore[i] = upper[i] * M::translate({0, -kUpperArmLen, 0}) * M::rotateX(elbow);
+      hand[i] = fore[i] * M::translate({0, -kForearmLen, 0}) * M::rotateX(0.1f);
+    } else {
+      const Vec3 s = posOf(shoulder);
+      const Vec3 pole = dirOf(torso, {side * 0.7f, -1.0f, 0.5f});  // elbows out, down and back
+      const Vec3 e = ikJoint(s, target[i], kUpperArmLen, kForearmLen, pole);
+      Vec3 w = target[i];
+      if (length(w - e) > kForearmLen) w = e + normalize(w - e) * kForearmLen;
+      upper[i] = boneFrame(s, e, fwd);
+      fore[i] = boneFrame(e, w, fwd);
+      hand[i] = fore[i] * M::translate({0, -kForearmLen, 0});
+    }
+  }
+
+  // --- body, everyday clothes, then armour on the same bones ---
+  const Vec3 white{1, 1, 1};
+  const Item headWear = look.wear[static_cast<size_t>(ArmorSlot::Head)];
+  const Item feetWear = look.wear[static_cast<size_t>(ArmorSlot::Feet)];
+  auto mesh = [&](BodyMesh b) -> const Mesh& { return body_[static_cast<size_t>(b)]; };
+  auto armorOn = [&](BodyPart part, const M& m) {
+    for (Item w : look.wear)
+      if (w != Item::None) bodyPart(armor_[static_cast<size_t>(w)][static_cast<size_t>(part)], m, white);
+  };
+  bodyPart(mesh(BodyMesh::HeadSkin), head, look.skin);
+  if (detail) {
+    bodyPart(mesh(BodyMesh::Face), head, white);
+    bodyPart(mesh(BodyMesh::Brows), head, look.hair);
+    if (look.beard && headWear != Item::MetalHelmet) bodyPart(mesh(BodyMesh::Beard), head, look.hair);
+  }
+  if (headWear == Item::None && look.hairStyle < 3)
+    bodyPart(mesh(static_cast<BodyMesh>(static_cast<int>(BodyMesh::HairShort) + look.hairStyle)), head, look.hair);
+  armorOn(BodyPart::Head, head);
+  bodyPart(mesh(BodyMesh::Torso), torso, look.shirt);
+  armorOn(BodyPart::Torso, torso);
+  bodyPart(mesh(BodyMesh::Pelvis), hips, look.pants);
+  if (detail) bodyPart(mesh(BodyMesh::Belt), hips, white);
+  armorOn(BodyPart::Pelvis, hips);
+  for (int i = 0; i < 2; ++i) {
+    bodyPart(mesh(BodyMesh::UpperArmSkin), upper[i], look.skin);
+    bodyPart(mesh(BodyMesh::Sleeve), upper[i], look.shirt);
+    armorOn(BodyPart::UpperArm, upper[i]);
+    bodyPart(mesh(BodyMesh::ForearmSkin), fore[i], look.skin);
+    armorOn(BodyPart::Forearm, fore[i]);
+    bodyPart(mesh(BodyMesh::HandSkin), hand[i], look.skin);
+    bodyPart(mesh(BodyMesh::Thigh), thigh[i], look.pants);
+    armorOn(BodyPart::Thigh, thigh[i]);
+    bodyPart(mesh(BodyMesh::Shin), shin[i], look.pants);
+    armorOn(BodyPart::Shin, shin[i]);
+    if (feetWear == Item::None) bodyPart(mesh(BodyMesh::Shoe), foot[i], white);
+    armorOn(BodyPart::Foot, foot[i]);
+  }
+
   if (holding) {
-    M item = rs * M::translate({0, -0.6f, 0}) * M::rotateX(-kHalfPi);
-    opaque_.push_back({&items_[static_cast<size_t>(look.held)], item, {1, 1, 1}, 1.0f, true});
+    opaque_.push_back({&items_[static_cast<size_t>(look.held)], itemM, white, 1.0f, true});
     if (gun && look.attacking && look.held != Item::Bow) {
       Vec3 m = gunMounts(look.held).muzzle;
-      opaque_.push_back({&blob_, item * M::translate(m) * M::scale({0.1f, 0.1f, 0.14f}), kFlash, 1.0f, false});
+      opaque_.push_back({&blob_, itemM * M::translate(m) * M::scale({0.1f, 0.1f, 0.14f}), kFlash, 1.0f, false});
     }
   }
 }
@@ -870,7 +1017,9 @@ void Renderer::gunWithMods(std::vector<DrawCmd>& list, const Mat4& m, const Item
 }
 
 void Renderer::drawViewModel(const ItemStack& heldStack, float swing, bool muzzleFlash, float bobPhase, float bobAmount,
-                             float aim, bool hideGun) {
+                             float aim, bool hideGun, const PlayerLook& look) {
+  const Vec3 kSkin = look.skin;
+  const Vec3 kSleeve = look.wear[static_cast<size_t>(ArmorSlot::Chest)] == Item::ClothShirt ? kBurlapSleeve : look.skin * 0.97f;
   using M = Mat4;
   const Item held = heldStack.empty() ? Item::None : heldStack.item;
   const M cam = M::translate(cam_.eye) * M::rotateY(cam_.yaw) * M::rotateX(cam_.pitch);

@@ -61,10 +61,18 @@ AABB nodeBounds(const ResourceNode& n);
 // --- placed objects ---------------------------------------------------------------
 enum class ObjType : uint8_t {
   None, Foundation, Wall, Doorway, Floor, Stairs, Door, Workbench, StorageBox, SleepingBag, LootBag,
-  LargeBox, Stash, LandClaim, Charge, Count
+  LargeBox, Stash, LandClaim, Charge,
+  // --- 0.5 ---
+  BodyBag,   // what a player leaves behind when they die (owner = the dead player)
+  RigLeg,    // oil rig support column (pos = top)
+  Ladder,    // climbable; pos = top centre, hangs down 16 m. rot 0 runs along X
+  Crate,     // military crate on monuments: loot that refills
+  Railing,   // waist-high rail on a cell edge (placed like a wall)
+  Count
 };
 enum class Tier : uint8_t { Twig, Wood, Stone, Metal };
-enum ObjFlags : uint8_t { kDoorOpen = 1, kLocked = 2 };  // kLocked: has a code lock
+// kLocked: has a code lock. kMonument: part of a generated monument (oil rig): indestructible, not saved.
+enum ObjFlags : uint8_t { kDoorOpen = 1, kLocked = 2, kMonument = 4 };
 constexpr float kClaimRadius = 25.0f;  // land claim post: building privilege radius
 
 constexpr float kGrid = 3.0f;        // building grid cell, metres
@@ -95,6 +103,7 @@ ObjType deployableFor(Item item);  // None if the item can't be placed
 Tier doorTierFor(Item item);       // wooden / sheet metal / armored doors
 bool isLockable(ObjType t);        // doors, boxes, claim posts
 int containerSize(ObjType t);      // 0 = not a container
+inline bool isLootPile(ObjType t) { return t == ObjType::LootBag || t == ObjType::BodyBag; }  // vanish when empty
 // The pieces the building plan cycles through.
 const std::vector<ObjType>& buildPlanPieces();
 
@@ -119,6 +128,8 @@ class World {
 
   // True if `box` overlaps any solid object box.
   bool blocked(const AABB& box) const;
+  // True if `box` touches a ladder.
+  bool onLadder(const AABB& box) const;
   // Highest walkable surface under a footprint (terrain, object tops, stairs)
   // that is no higher than feetY + stepUp.
   float groundHeight(const Terrain& terrain, float x, float z, float radius, float feetY, float stepUp) const;

@@ -1,5 +1,8 @@
 #include "net_client.h"
 
+#include "adpcm.h"
+
+#include <algorithm>
 #include <cstdio>
 
 namespace sg {
@@ -37,7 +40,7 @@ void NetClient::disconnect() {
   world_.clear();
   depleted_.clear();
   ++nodesVersion_;
-  inventory_.assign(kInventorySlots, {});
+  inventory_.assign(kPlayerSlots, {});
   craftQueue_.clear();
   containerId_ = 0;
   containerSlots_.clear();
@@ -110,6 +113,15 @@ void NetClient::handlePacket(const uint8_t* data, size_t size, double now) {
       }
       break;
     }
+    case PacketType::Voice: {
+      VoicePacket v;
+      if (status_ != Status::Connected || !decode(data, size, v) || voiceIn_.size() > 200) return;
+      adpcm::State st{v.predictor, v.index};
+      VoiceChunk chunk{v.speaker, std::vector<int16_t>(v.data.size() * 2)};
+      adpcm::decode(v.data.data(), v.data.size(), st, chunk.pcm.data());
+      voiceIn_.push_back(std::move(chunk));
+      break;
+    }
     case PacketType::Snapshot: {
       SnapshotPacket s;
       if (decode(data, size, s) && status_ == Status::Connected) onSnapshot(s, now);
@@ -150,7 +162,7 @@ void NetClient::onMessage(const std::vector<uint8_t>& msg, double now) {
   switch (static_cast<Msg>(raw)) {
     case Msg::Inventory: {
       Slots s;
-      if (readSlots(r, s) && s.size() == kInventorySlots) {
+      if (readSlots(r, s) && s.size() == kPlayerSlots) {
         inventory_ = s;
         ++inventoryVersion_;
       }
@@ -235,6 +247,7 @@ void NetClient::onMessage(const std::vector<uint8_t>& msg, double now) {
         lastHitTime_ = now;
         lastHitFlags_ = f;
         sounds_.push_back({(f & 2) ? Sound::Kill : (f & 1) ? Sound::Headshot : Sound::Hitmarker, {}, false});
+        if ((f & 4) && !(f & 2)) sounds_.push_back({Sound::HitArmor, {}, false});
       }
       break;
     }
@@ -415,6 +428,28 @@ void NetClient::chat(const std::string& text) {
   sendReliable(w);
 }
 
+void NetClient::sendVoice(const int16_t* pcm, size_t samples) {
+  if (status_ != Status::Connected || samples < 2) return;
+  samples = std::min(samples, kVoiceFrameSamples) & ~static_cast<size_t>(1);
+  VoicePacket p;
+  p.seq = voiceSeq_++;
+  adpcm::State st{voicePred_, voiceIndex_};
+  p.predictor = st.predictor;
+  p.index = st.index;
+  p.data.resize(samples / 2);
+  adpcm::encode(pcm, samples, st, p.data.data());
+  voicePred_ = st.predictor;
+  voiceIndex_ = st.index;
+  auto bytes = encode(p);
+  socket_.send(server_, bytes.data(), bytes.size());
+}
+
+std::vector<NetClient::VoiceChunk> NetClient::takeVoice() {
+  std::vector<VoiceChunk> out;
+  out.swap(voiceIn_);
+  return out;
+}
+
 void NetClient::sendInput(PlayerInput in) {
   if (status_ != Status::Connected) return;
   in.seq = nextSeq_++;
@@ -477,7 +512,7 @@ std::vector<NetClient::RemotePlayer> NetClient::remotePlayers(double now) const 
     if (b->time > a->time) alpha = clampf(static_cast<float>((t - a->time) / (b->time - a->time)), 0.0f, 1.0f);
     const EntityState& newest = buf.back().state;
     out.push_back({id, lerp(a->state.pos, b->state.pos, alpha), lerpAngle(a->state.yaw, b->state.yaw, alpha),
-                   lerpf(a->state.pitch, b->state.pitch, alpha), newest.held, newest.flags});
+                   lerpf(a->state.pitch, b->state.pitch, alpha), newest.held, newest.flags, newest.wear});
   }
   return out;
 }

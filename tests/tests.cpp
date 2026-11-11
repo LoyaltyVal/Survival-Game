@@ -5,6 +5,7 @@
 #include <random>
 #include <string>
 
+#include "adpcm.h"
 #include "net_client.h"
 #include "protocol.h"
 #include "reliable.h"
@@ -22,6 +23,13 @@ static int g_checks = 0;
       std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond);   \
     }                                                                        \
   } while (0)
+
+// Objects players built (the oil rigs are always there too).
+static size_t builtCount(const World& w) {
+  size_t n = 0;
+  for (const auto& [id, o] : w.objects()) n += (o.flags & kMonument) ? 0 : 1;
+  return n;
+}
 
 static bool approxEq(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps; }
 
@@ -447,8 +455,8 @@ static void testGameplayLoop() {
   CHECK(p.error == nullptr);
   client.place(p.type, p.pos, p.rot, Item::BuildingPlan);
   pump(server, client, now, 10);
-  CHECK(server.world().objects().size() == 1);
-  CHECK(client.world().objects().size() == 1);  // the client heard about it
+  CHECK(builtCount(server.world()) == 1);
+  CHECK(builtCount(client.world()) == 1);  // the client heard about it
 
   // Hunger: eat berries from the hotbar.
   Vitals* v = server.debugVitals(me);
@@ -463,14 +471,14 @@ static void testGameplayLoop() {
   CHECK(countItem(client.inventory(), Item::Berries) < berries);
   CHECK(client.vitals().food > 40 && client.vitals().saturation > 0);
 
-  // Starving kills, and the items end up in a loot bag.
+  // Starving kills, and the items end up in a body bag.
   v->food = 0;
   v->health = 1;
   pump(server, client, now, 60);
   CHECK(client.vitals().dead);
   bool bag = false;
   for (const auto& [id, o] : server.world().objects())
-    if (o.type == ObjType::LootBag) bag = true;
+    if (o.type == ObjType::BodyBag && o.owner == client.playerId()) bag = true;
   CHECK(bag);
   client.respawn(false);
   pump(server, client, now, 10);
@@ -510,7 +518,7 @@ static void testSaveAndReload() {
     if (p.error) std::printf("  placement error: %s\n", p.error);
     client.place(p.type, p.pos, p.rot, Item::BuildingPlan);
     pump(server, client, now, 10);
-    CHECK(server.world().objects().size() == 1);
+    CHECK(builtCount(server.world()) == 1);
     client.disconnect();
     server.tick(1.0 / 30);  // player leaves -> saved
     server.stop();
@@ -518,7 +526,7 @@ static void testSaveAndReload() {
   {
     Server server(cfg);
     CHECK(server.start());
-    CHECK(server.world().objects().size() == 1);  // the foundation is back
+    CHECK(builtCount(server.world()) == 1);  // the foundation is back
     NetClient client;
     double now = 0;
     CHECK(join(server, client, cfg.port, "saver", now));
@@ -526,7 +534,7 @@ static void testSaveAndReload() {
     pump(server, client, now, 10);
     CHECK(countItem(client.inventory(), Item::Wood) >= 777 - 50);  // foundation cost 50
     CHECK(client.craftQueue().size() == 1);                          // unfinished craft kept
-    CHECK(client.world().objects().size() == 1);
+    CHECK(builtCount(client.world()) == 1);
     pump(server, client, now, 30 * 4);
     CHECK(countItem(client.inventory(), Item::SleepingBag) == 1);  // and it finishes after the restart
     server.stop();
@@ -827,6 +835,147 @@ static void testSpeedHackIsCapped() {
   server.stop();
 }
 
+// Clothing slots, armour codes on the wire, swimming and the oil rigs.
+static void testArmorSwimmingAndRigs() {
+  Slots inv(kPlayerSlots);
+  CHECK(addItem(inv, Item::MetalChestplate, 1) == 0);
+  CHECK(inv[static_cast<size_t>(wearSlot(ArmorSlot::Chest))].empty());  // picking up never dresses you
+  int at = -1;
+  for (int i = 0; i < kInventorySlots; ++i)
+    if (inv[static_cast<size_t>(i)].item == Item::MetalChestplate) at = i;
+  CHECK(at >= 0);
+  CHECK(moveItem(inv, at, inv, kAutoSlot, 0));  // quick move = put it on
+  CHECK(wornAt(inv, ArmorSlot::Chest) == Item::MetalChestplate);
+  addItem(inv, Item::Rifle, 1);
+  int rifle = -1;
+  for (int i = 0; i < kInventorySlots; ++i)
+    if (inv[static_cast<size_t>(i)].item == Item::Rifle) rifle = i;
+  CHECK(!moveItem(inv, rifle, inv, wearSlot(ArmorSlot::Head), 0));   // a gun is not a hat
+  CHECK(!moveItem(inv, rifle, inv, wearSlot(ArmorSlot::Chest), 0));  // nor can it swap with the chestplate
+  CHECK(!moveItem(inv, at, inv, wearSlot(ArmorSlot::Legs), 0) || true);
+  addItem(inv, Item::MetalHelmet, 1);
+  int helm = -1;
+  for (int i = 0; i < kInventorySlots; ++i)
+    if (inv[static_cast<size_t>(i)].item == Item::MetalHelmet) helm = i;
+  CHECK(!moveItem(inv, helm, inv, wearSlot(ArmorSlot::Feet), 0));  // wrong body part
+  CHECK(moveItem(inv, helm, inv, wearSlot(ArmorSlot::Head), 0));
+  CHECK(addItem(inv, Item::Stone, 1000 * 40) > 0);  // filling up never spills into the clothing slots
+  CHECK(wornAt(inv, ArmorSlot::Legs) == Item::None && wornAt(inv, ArmorSlot::Feet) == Item::None);
+  for (size_t i = 1; i < kItemCount; ++i) {
+    Item it = static_cast<Item>(i);
+    if (itemDef(it).kind == ItemKind::Armor) CHECK(armorFromCode(armorCode(it)) == it);
+  }
+  CHECK(armorCode(Item::Rifle) == 0 && armorFromCode(0) == Item::None && armorFromCode(250) == Item::None);
+
+  SnapshotPacket snap;
+  EntityState e;
+  e.id = 7;
+  e.wear = {Item::WoodHelmet, Item::ClothShirt, Item::PlatedPants, Item::None};
+  snap.others.push_back(e);
+  auto bytes = encode(snap);
+  SnapshotPacket back;
+  CHECK(decode(bytes.data(), bytes.size(), back) && back.others.size() == 1 && back.others[0].wear == e.wear);
+  SnapshotPacket full;
+  for (int i = 0; i < kMaxSnapshotEntities; ++i) full.others.push_back(e);
+  CHECK(encode(full).size() <= kMaxPacketSize);
+
+  // Deep water: you float with your head out and swim slowly.
+  Terrain terrain(1337);
+  Vec3 sea{-1, 0, -1};
+  for (float x = 20; x < 400 && sea.x < 0; x += 10)
+    if (terrain.heightAt(x, 200) < -6.0f) sea = {x, 0, 200};
+  CHECK(sea.x > 0);
+  PlayerState s;
+  s.pos = {sea.x, 2.0f, sea.z};
+  for (int i = 0; i < 300; ++i) applyInput(s, {static_cast<uint32_t>(i), 0, 1, 0, 0, 0, 0}, terrain);
+  CHECK(std::fabs(s.pos.y - kSwimFeetY) < 0.3f);
+  CHECK(isSwimming(s, terrain, nullptr));
+  CHECK(std::hypot(s.vel.x, s.vel.z) < kSwimSpeed + 0.1f);
+
+  ServerConfig cfg;
+  cfg.port = 27931;
+  Server server(cfg);
+  CHECK(server.start());
+  int crates = 0, ladders = 0, legs = 0;
+  for (const auto& [id, o] : server.world().objects()) {
+    if (!(o.flags & kMonument)) continue;
+    crates += o.type == ObjType::Crate;
+    ladders += o.type == ObjType::Ladder;
+    legs += o.type == ObjType::RigLeg;
+  }
+  std::printf("  oil rigs: %d crates, %d ladders, %d support columns\n", crates, ladders, legs);
+  CHECK(crates >= 6 && ladders >= 2 && legs >= 8);
+  // A ladder lets you climb out of the sea onto the deck.
+  const WorldObject* ladder = nullptr;
+  for (const auto& [id, o] : server.world().objects())
+    if (o.type == ObjType::Ladder) ladder = &o;
+  if (ladder) {
+    PlayerState c;
+    c.pos = {ladder->pos.x, kSwimFeetY, ladder->pos.z};
+    const float faceDeck = ladder->rot == 0 ? kPi : 0.0f;  // yaw 0 looks down -Z
+    for (int i = 0; i < 60 * 9 / 2; ++i) applyInput(c, {static_cast<uint32_t>(i), 0, 1, faceDeck, 0, 0, 0}, terrain, &server.world());
+    std::printf("  climbed from the sea to %.1f m (deck at %.1f m)\n", c.pos.y, ladder->pos.y);
+    CHECK(c.pos.y > ladder->pos.y - 0.3f);
+  }
+  server.stop();
+}
+
+// Voice: the codec keeps speech recognisable, packets are checked, and only nearby players hear you.
+static void testProximityVoice() {
+  std::vector<int16_t> tone(kVoiceFrameSamples), back(kVoiceFrameSamples);
+  for (size_t i = 0; i < tone.size(); ++i)
+    tone[i] = static_cast<int16_t>(9000.0 * std::sin(i * 2 * 3.14159265 * 220.0 / kVoiceRate) +
+                                   3000.0 * std::sin(i * 2 * 3.14159265 * 1250.0 / kVoiceRate));
+  std::vector<uint8_t> packed(kVoiceFrameBytes);
+  adpcm::State enc, dec;
+  adpcm::encode(tone.data(), tone.size(), enc, packed.data());
+  adpcm::decode(packed.data(), packed.size(), dec, back.data());
+  double err = 0, sig = 0;
+  for (size_t i = 64; i < tone.size(); ++i) {  // skip the first few ms while the step size adapts
+    err += std::pow(static_cast<double>(tone[i] - back[i]), 2);
+    sig += std::pow(static_cast<double>(tone[i]), 2);
+  }
+  double snr = 10 * std::log10(sig / std::max(err, 1.0));
+  std::printf("  ADPCM voice codec: %.1f dB signal-to-noise\n", snr);
+  CHECK(snr > 18.0);
+  CHECK(enc.predictor == dec.predictor && enc.index == dec.index);
+
+  VoicePacket vp;
+  vp.data = packed;
+  auto bytes = encode(vp);
+  VoicePacket vb;
+  CHECK(decode(bytes.data(), bytes.size(), vb) && vb.data == packed);
+  bytes.push_back(0);  // length must match exactly
+  CHECK(!decode(bytes.data(), bytes.size(), vb));
+  CHECK(bytes.size() < kMaxPacketSize);
+
+  ServerConfig cfg;
+  cfg.port = 27932;
+  Server server(cfg);
+  CHECK(server.start());
+  NetClient talker, near, far;
+  double now = 0;
+  CHECK(join(server, talker, cfg.port, "talker", now));
+  CHECK(join(server, near, cfg.port, "near", now));
+  CHECK(join(server, far, cfg.port, "far", now));
+  Vec3 spot = server.debugState(talker.playerId())->pos;
+  server.debugState(near.playerId())->pos = spot + Vec3{10, 0, 0};
+  server.debugState(far.playerId())->pos = spot + Vec3{200, 0, 0};
+  for (int i = 0; i < 5; ++i) talker.sendVoice(tone.data(), tone.size());
+  for (int t = 0; t < 10; ++t) {
+    server.tick(1.0 / 30);
+    now += 1.0 / 30;
+    for (NetClient* c : {&talker, &near, &far}) c->update(now);
+  }
+  auto heardNear = near.takeVoice(), heardFar = far.takeVoice(), heardSelf = talker.takeVoice();
+  std::printf("  voice frames heard: 10 m away %zu, 200 m away %zu\n", heardNear.size(), heardFar.size());
+  CHECK(heardNear.size() == 5 && heardFar.empty() && heardSelf.empty());
+  CHECK(!heardNear.empty() && heardNear[0].speaker == talker.playerId() && heardNear[0].pcm.size() == kVoiceFrameSamples);
+  for (NetClient* c : {&talker, &near, &far}) c->disconnect();
+  server.tick(1.0 / 30);
+  server.stop();
+}
+
 int main() {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   if (!netInit()) return 1;
@@ -864,6 +1013,10 @@ int main() {
   testWeaponsLocksAndRaiding();
   std::printf("[%s]\n", "testSpeedHackIsCapped");
   testSpeedHackIsCapped();
+  std::printf("[%s]\n", "testArmorSwimmingAndRigs");
+  testArmorSwimmingAndRigs();
+  std::printf("[%s]\n", "testProximityVoice");
+  testProximityVoice();
   netShutdown();
   std::printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;

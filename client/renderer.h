@@ -8,6 +8,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "character.h"
 #include "gl.h"
 #include "items.h"
 #include "meshes.h"
@@ -25,13 +26,23 @@ struct Camera {
 };
 
 struct PlayerLook {
+  // appearance (see lookFor): picked from the player id so everyone sees the same person
+  Vec3 skin{0.32f, 0.17f, 0.10f};
+  Vec3 hair{0.05f, 0.03f, 0.015f};
   Vec3 shirt{0.3f, 0.1f, 0.05f};
+  Vec3 pants{0.06f, 0.09f, 0.16f};
+  uint8_t hairStyle = 0;  // 0 short, 1 buzz, 2 long, 3 bald
+  bool beard = false;
+  std::array<Item, kArmorSlots> wear{};  // clothing/armour by ArmorSlot
   Item held = Item::None;
   bool dead = false;
   bool attacking = false;
   float walkPhase = 0;   // radians, advances with distance walked
   float walkAmount = 0;  // 0 standing .. 1 running
 };
+
+// A stable random look (skin tone, hair, clothes) for a player id.
+PlayerLook lookFor(uint32_t playerId);
 
 class Renderer {
  public:
@@ -49,8 +60,9 @@ class Renderer {
   void drawPlayer(const Vec3& feet, float yaw, float pitch, const PlayerLook& look);
   // First-person arms and held item. swing is 0..1 through an attack (or recoil for guns);
   // aim is 0 (hip) .. 1 (looking down the sights); hideGun while looking through a scope.
+  // look: your own skin and clothes (sleeves and hands).
   void drawViewModel(const ItemStack& held, float swing, bool muzzleFlash, float bobPhase, float bobAmount, float aim,
-                     bool hideGun);
+                     bool hideGun, const PlayerLook& look);
   // Fireball and smoke; age in seconds since the blast.
   void drawExplosion(const Vec3& pos, float age);
   void endFrame();
@@ -109,6 +121,9 @@ class Renderer {
   float heightOriginX_ = 0, heightOriginZ_ = 0, heightExtent_ = 1;
   Lighting light_;
   std::array<Mesh, kItemCount> items_{};
+  std::array<Mesh, kBodyMeshes> body_{};
+  std::array<std::array<Mesh, kBodyParts>, kItemCount> armor_{};  // armour item -> piece on each body part
+  void bodyPart(const Mesh& mesh, const Mat4& m, const Vec3& tint);
   std::array<GLuint, kItemCount> icons_{};
   bool haveTerrain_ = false;
   float terrainCx_ = 0, terrainCz_ = 0;

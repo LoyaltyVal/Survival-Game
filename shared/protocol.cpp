@@ -1,5 +1,8 @@
 #include "protocol.h"
 
+#include <algorithm>
+#include <cstddef>
+
 #include <cmath>
 #include <cstddef>
 
@@ -131,6 +134,7 @@ std::vector<uint8_t> encode(const SnapshotPacket& p) {
     w.f32(e.pitch);
     w.u16(static_cast<uint16_t>(e.held));
     w.u8(e.flags);
+    for (Item a : e.wear) w.u8(armorCode(a));
   }
   return w.data();
 }
@@ -210,6 +214,11 @@ bool decode(const uint8_t* data, size_t size, SnapshotPacket& out) {
         !validItem(held))
       return false;
     e.held = static_cast<Item>(held);
+    for (auto& a : e.wear) {
+      uint8_t code;
+      if (!r.u8(code)) return false;
+      a = armorFromCode(code);
+    }
     out.others.push_back(e);
   }
   return true;
@@ -224,6 +233,29 @@ bool decode(const uint8_t* data, size_t size, InfoReplyPacket& out) {
   ByteReader r(data, size);
   return readPacketHeader(r, PacketType::InfoReply) && r.u32(out.nonce) && r.str(out.name, kMaxServerNameLength) &&
          r.u16(out.players) && r.u16(out.maxPlayers) && r.u32(out.seed) && r.u16(out.version);
+}
+
+std::vector<uint8_t> encode(const VoicePacket& p) {
+  auto w = packetHeader(PacketType::Voice);
+  w.u32(p.speaker);
+  w.u16(p.seq);
+  w.u16(static_cast<uint16_t>(p.predictor));
+  w.u8(p.index);
+  size_t n = std::min(p.data.size(), kVoiceFrameBytes);
+  w.u16(static_cast<uint16_t>(n));
+  w.data().insert(w.data().end(), p.data.begin(), p.data.begin() + static_cast<std::ptrdiff_t>(n));
+  return w.data();
+}
+
+bool decode(const uint8_t* data, size_t size, VoicePacket& out) {
+  ByteReader r(data, size);
+  uint16_t pred, n;
+  if (!(readPacketHeader(r, PacketType::Voice) && r.u32(out.speaker) && r.u16(out.seq) && r.u16(pred) && r.u8(out.index) &&
+        r.u16(n)))
+    return false;
+  if (out.index > 88 || n == 0 || n > kVoiceFrameBytes || n != r.remaining()) return false;
+  out.predictor = static_cast<int16_t>(pred);
+  return r.bytes(out.data, n);
 }
 
 }  // namespace sg

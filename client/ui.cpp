@@ -99,6 +99,13 @@ void slotWidget(App& a, uint32_t container, int slot, const ItemStack& st, bool 
   dl->AddRectFilled(p, p + ImVec2(size, size), hovered ? rgba(0.28f, 0.28f, 0.30f, 0.95f) : rgba(0.16f, 0.16f, 0.18f, 0.9f), 6 * g_scale);
   if (selected) dl->AddRect(p, p + ImVec2(size, size), ImGui::GetColorU32(kAccent), 6 * g_scale, 0, 2.5f * g_scale);
   if (!st.empty()) drawItemIcon(dl, p, size, st);
+  if (!st.empty() && itemDef(st.item).kind == ItemKind::Armor && itemDef(st.item).durability) {  // condition bar
+    float cond = 1.0f - static_cast<float>(st.data) / static_cast<float>(itemDef(st.item).durability);
+    ImVec2 b0 = p + ImVec2(6 * g_scale, size - 7 * g_scale), b1 = p + ImVec2(size - 6 * g_scale, size - 4 * g_scale);
+    dl->AddRectFilled(b0, b1, rgba(0, 0, 0, 0.6f), 2 * g_scale);
+    dl->AddRectFilled(b0, ImVec2(b0.x + (b1.x - b0.x) * std::clamp(cond, 0.0f, 1.0f), b1.y),
+                      cond > 0.5f ? rgba(0.4f, 0.8f, 0.35f) : cond > 0.2f ? rgba(0.9f, 0.7f, 0.2f) : rgba(0.9f, 0.25f, 0.2f), 2 * g_scale);
+  }
 
   if (!st.empty() && ImGui::BeginDragDropSource()) {
     SlotPayload pl{container, slot, ImGui::GetIO().KeyShift ? std::max(1, st.count / 2) : 0};
@@ -136,6 +143,13 @@ void slotWidget(App& a, uint32_t container, int slot, const ItemStack& st, bool 
     }
     if (d.kind == ItemKind::Attachment) ImGui::TextColored(kAccent, "Drag onto a gun's attachment slot (click the gun first)");
     if (d.kind == ItemKind::Food) ImGui::TextColored(kMuted, "+%.0f food  +%.0f saturation", d.food, d.saturation);
+    if (d.kind == ItemKind::Armor) {
+      static const char* where[] = {"Head", "Chest", "Legs", "Feet"};
+      ImGui::TextColored(kMuted, "%s  |  Bullets -%.0f%%  Melee -%.0f%%  |  Condition %.0f%%", where[static_cast<int>(d.armorSlot)],
+                         d.armorBullet * 100, d.armorMelee * 100,
+                         100.0f * (1.0f - static_cast<float>(st.data) / static_cast<float>(std::max<uint16_t>(1, d.durability))));
+      ImGui::TextColored(kAccent, "Right-click or hold it and click to wear");
+    }
     ImGui::TextColored(kMuted, "Right-click: quick move   Shift-drag: half   Drag outside: drop");
     ImGui::EndTooltip();
   }
@@ -256,24 +270,21 @@ void uiMainMenu(App& a) {
   ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.58f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
   ImGui::SetNextWindowSize(ImVec2(380 * g_scale, 0), ImGuiCond_Always);
   ImGui::Begin("##menu", nullptr, kPanel | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize);
-  ImGui::TextColored(kMuted, "Your name");
-  ImGui::SetNextItemWidth(-1);
-  ImGui::InputText("##name", a.playerName, sizeof(a.playerName));
-  ImGui::Spacing();
-  if (wideButton("Play")) {
+  ImGui::BeginDisabled(a.settingsOpen);
+  if (wideButton("Play", 46 * g_scale)) {
     a.screen = Screen::ServerBrowser;
     a.connectError.clear();
     a.lastPing = -1e9;  // ping right away
   }
   ImGui::Spacing();
-  ImGui::TextColored(kMuted, "Mouse sensitivity");
-  ImGui::SetNextItemWidth(-1);
-  ImGui::SliderFloat("##sens", &a.mouseSensitivity, 0.2f, 3.0f, "%.2f");
-  ImGui::TextColored(kMuted, "Volume");
-  ImGui::SetNextItemWidth(-1);
-  ImGui::SliderFloat("##vol", &a.volume, 0.0f, 1.0f, "%.2f");
+  if (wideButton("Settings", 40 * g_scale)) a.settingsOpen = true;
   ImGui::Spacing();
-  if (wideButton("Quit")) a.quit = true;
+  if (wideButton("Quit", 40 * g_scale)) a.quit = true;
+  ImGui::EndDisabled();
+  ImGui::Spacing();
+  ImGui::TextColored(kMuted, "Playing as");
+  ImGui::SameLine();
+  ImGui::TextUnformatted(a.playerName);
   ImGui::End();
 
   textCentered(bg, a.fontBody, a.fontBody->FontSize * 0.85f, ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 24 * g_scale),
@@ -643,6 +654,8 @@ static void hudMessages(App& a) {
                  a.prompt.c_str());
 }
 
+static void speakerIcon(ImDrawList* dl, ImVec2 c, float s, ImU32 col);
+
 static void hudNametags(App& a) {
   ImGuiIO& io = ImGui::GetIO();
   ImDrawList* dl = ImGui::GetBackgroundDrawList();
@@ -660,6 +673,51 @@ static void hudNametags(App& a) {
     if (rank != Rank::Player) name = "[" + std::string(rankName(rank)) + "] " + name;
     textCentered(dl, a.fontBody, a.fontBody->FontSize * 0.9f, ImVec2(sx * io.DisplaySize.x, sy * io.DisplaySize.y), col,
                  name.c_str());
+    auto talk = a.speaking.find(p.id);
+    if (talk != a.speaking.end() && a.now - talk->second < 0.3) {
+      float w = ImGui::CalcTextSize(name.c_str()).x * 0.9f;
+      speakerIcon(dl, ImVec2(sx * io.DisplaySize.x - w * 0.5f - 14 * g_scale, sy * io.DisplaySize.y), 14 * g_scale,
+                  rgba(0.45f, 0.95f, 0.5f));
+    }
+  }
+}
+
+// Little speaker symbol (box + cone + sound waves).
+static void speakerIcon(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
+  dl->AddRectFilled(c + ImVec2(-s * 0.5f, -s * 0.2f), c + ImVec2(-s * 0.2f, s * 0.2f), col);
+  dl->AddTriangleFilled(c + ImVec2(-s * 0.2f, -s * 0.2f), c + ImVec2(s * 0.1f, -s * 0.5f), c + ImVec2(s * 0.1f, s * 0.5f), col);
+  dl->AddTriangleFilled(c + ImVec2(-s * 0.2f, -s * 0.2f), c + ImVec2(s * 0.1f, s * 0.5f), c + ImVec2(-s * 0.2f, s * 0.2f), col);
+  for (int k = 1; k <= 2; ++k) {
+    dl->PathArcTo(c + ImVec2(s * 0.1f, 0), s * 0.25f * static_cast<float>(k), -0.8f, 0.8f, 8);
+    dl->PathStroke(col, 0, 1.5f * g_scale);
+  }
+}
+
+// Who you can hear right now, and whether you are on the air yourself.
+static void hudVoice(App& a) {
+  ImGuiIO& io = ImGui::GetIO();
+  ImDrawList* dl = ImGui::GetForegroundDrawList();
+  float y = io.DisplaySize.y * 0.38f;
+  const float x = 18 * g_scale, line = 26 * g_scale;
+  for (const auto& [id, t] : a.speaking) {
+    if (a.now - t > 0.3) continue;
+    std::string name = a.net.nameOf(id);
+    if (name.empty()) continue;
+    ImVec2 ts = ImGui::CalcTextSize(name.c_str());
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + ts.x + 44 * g_scale, y + line - 4 * g_scale), rgba(0, 0, 0, 0.45f), 5 * g_scale);
+    speakerIcon(dl, ImVec2(x + 15 * g_scale, y + (line - 4 * g_scale) * 0.5f), 14 * g_scale, rgba(0.45f, 0.95f, 0.5f));
+    dl->AddText(ImVec2(x + 32 * g_scale, y + (line - 4 * g_scale - ts.y) * 0.5f), rgba(1, 1, 1, 0.95f), name.c_str());
+    y += line;
+  }
+  if (a.transmitting) {
+    const char* label = "You are talking";
+    ImVec2 ts = ImGui::CalcTextSize(label);
+    ImVec2 p(io.DisplaySize.x * 0.5f - ts.x * 0.5f - 22 * g_scale, io.DisplaySize.y - 190 * g_scale);
+    dl->AddRectFilled(p, p + ImVec2(ts.x + 44 * g_scale, line), rgba(0, 0, 0, 0.5f), 6 * g_scale);
+    speakerIcon(dl, p + ImVec2(15 * g_scale, line * 0.5f), 14 * g_scale, rgba(0.95f, 0.55f, 0.25f));
+    dl->AddText(p + ImVec2(32 * g_scale, (line - ts.y) * 0.5f), rgba(1, 1, 1), label);
+  } else if (a.voiceMode != 0 && a.micFailed) {
+    dl->AddText(ImVec2(x, io.DisplaySize.y * 0.38f - line), rgba(1, 0.5f, 0.4f, 0.7f), "No microphone (Settings > Voice)");
   }
 }
 
@@ -668,12 +726,13 @@ static void hudInfo(App& a) {
   ImDrawList* dl = ImGui::GetForegroundDrawList();
   char buf[160];
   const Vec3 p = a.net.predicted().pos;
-  std::snprintf(buf, sizeof(buf), "%s  |  %.0f fps  |  %.0f ms", a.net.serverName().c_str(), a.fps, a.net.pingMs());
+  if (a.showFps) std::snprintf(buf, sizeof(buf), "%s  |  %.0f fps  |  %.0f ms", a.net.serverName().c_str(), a.fps, a.net.pingMs());
+  else std::snprintf(buf, sizeof(buf), "%s", a.net.serverName().c_str());
   ImVec2 ts = ImGui::CalcTextSize(buf);
   dl->AddText(ImVec2(io.DisplaySize.x - ts.x - 16 * g_scale, 12 * g_scale), rgba(1, 1, 1, 0.5f), buf);
   if (!a.inventoryOpen)
     dl->AddText(ImVec2(io.DisplaySize.x - 330 * g_scale, io.DisplaySize.y - 140 * g_scale - 3 * 32 * g_scale),
-                rgba(1, 1, 1, 0.45f), "Tab inventory   E use   R piece   P players   Enter chat (/help)");
+                rgba(1, 1, 1, 0.45f), "Tab inventory   E use   V talk   P players   Enter chat (/help)");
 
   // Compass strip with the clock under it.
   const float cx = io.DisplaySize.x * 0.5f, top = 10 * g_scale, width = 420 * g_scale;
@@ -800,6 +859,45 @@ static void inventoryScreen(App& a) {
   slotGrid(a, kSelfContainer, inv, 0, kHotbarSlots, 6, a.hotbar);
   ImGui::End();
 
+  // Clothing (left of the inventory): what you wear shows on your character.
+  const float clothW = slot + 2 * ImGui::GetStyle().WindowPadding.x + 120 * g_scale;
+  ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - gridW * 0.5f - clothW - 16 * g_scale, io.DisplaySize.y * 0.5f - invH * 0.5f),
+                          ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(clothW, invH), ImGuiCond_Always);
+  ImGui::Begin("Clothing", nullptr, kPanel);
+  {
+    static const char* names[] = {"Head", "Chest", "Legs", "Feet"};
+    float bullet = 0, melee = 0;
+    static const float share[] = {0.15f, 0.45f, 0.30f, 0.10f};
+    for (int k = 0; k < kArmorSlots; ++k) {
+      const int si = wearSlot(static_cast<ArmorSlot>(k));
+      const ItemStack& st = inv[static_cast<size_t>(si)];
+      ImVec2 p = ImGui::GetCursorScreenPos();
+      slotWidget(a, kSelfContainer, si, st, false);
+      if (st.empty())
+        textCentered(ImGui::GetWindowDrawList(), ImGui::GetFont(), ImGui::GetFontSize() * 0.7f, p + ImVec2(slot, slot) * 0.5f,
+                     rgba(1, 1, 1, 0.25f), names[k]);
+      ImGui::SameLine();
+      ImGui::BeginGroup();
+      ImGui::TextColored(kMuted, "%s", names[k]);
+      if (!st.empty()) {
+        const ItemDef& d = itemDef(st.item);
+        ImGui::TextUnformatted(d.name);
+        ImGui::TextColored(kMuted, "-%.0f%% dmg", d.armorBullet * 100);
+        bullet += d.armorBullet * share[k];
+        melee += d.armorMelee * share[k];
+      }
+      ImGui::EndGroup();
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(kMuted, "Protection");
+    ImGui::Text("Bullets %.0f%%", bullet * 100);
+    ImGui::Text("Melee   %.0f%%", melee * 100);
+    ImGui::TextColored(kMuted, "Headshots x2, legs x0.75");
+  }
+  ImGui::End();
+
   // Crafting (right).
   const float craftW = 430 * g_scale;
   ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f + gridW * 0.5f + 16 * g_scale, io.DisplaySize.y * 0.5f - invH * 0.5f),
@@ -916,7 +1014,7 @@ static void inventoryScreen(App& a) {
   if (a.net.openContainer()) {
     const Slots& cs = a.net.containerSlots();
     int cols = 6;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - gridW * 1.5f - 16 * g_scale, io.DisplaySize.y * 0.5f - invH * 0.5f),
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - gridW * 1.5f - clothW - 32 * g_scale, io.DisplaySize.y * 0.5f - invH * 0.5f),
                             ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(gridW, invH), ImGuiCond_Always);
     ImGui::Begin(objName(a.net.openContainerType()), nullptr, kPanel);
@@ -941,7 +1039,7 @@ static void deathScreen(App& a) {
   ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.55f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
   ImGui::SetNextWindowSize(ImVec2(360 * g_scale, 0), ImGuiCond_Always);
   ImGui::Begin("##death", nullptr, kPanel | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize);
-  ImGui::TextColored(kMuted, "Your items are in a loot bag where you died.");
+  ImGui::TextColored(kMuted, "Your things are in a body bag where you died.");
   ImGui::TextColored(kMuted, "Everything in your boxes is safe.");
   ImGui::Spacing();
   bool bag = hasSleepingBag(a);
@@ -953,37 +1051,155 @@ static void deathScreen(App& a) {
 }
 
 static void pauseMenu(App& a) {
+  if (a.settingsOpen) return;  // the settings window takes its place
   ImGuiIO& io = ImGui::GetIO();
   ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, rgba(0, 0, 0, 0.5f));
-  centerNext(ImVec2(420 * g_scale, 0));
+  centerNext(ImVec2(360 * g_scale, 0));
   ImGui::Begin("Paused", nullptr, kPanel | ImGuiWindowFlags_AlwaysAutoResize);
-  if (wideButton("Resume")) a.pauseOpen = false;
-  if (wideButton("Players and ranks (P)")) a.showPlayers = true;
+  if (wideButton("Resume", 40 * g_scale)) a.pauseOpen = false;
+  if (wideButton("Settings", 40 * g_scale)) a.settingsOpen = true;
+  if (wideButton("Players and ranks (P)", 40 * g_scale)) a.showPlayers = true;
   ImGui::Spacing();
-  ImGui::TextColored(kMuted, "Mouse sensitivity");
-  ImGui::SetNextItemWidth(-1);
-  ImGui::SliderFloat("##sens", &a.mouseSensitivity, 0.2f, 3.0f, "%.2f");
-  ImGui::TextColored(kMuted, "Volume");
-  ImGui::SetNextItemWidth(-1);
-  ImGui::SliderFloat("##vol", &a.volume, 0.0f, 1.0f, "%.2f");
-  ImGui::Checkbox("Third-person camera (V)", &a.thirdPerson);
+  ImGui::Separator();
   ImGui::Spacing();
-  ImGui::SeparatorText("Controls");
-  ImGui::TextColored(kMuted,
-                     "WASD move, Shift sprint, Space jump\n"
-                     "Left click: hit / gather / shoot / eat / build / plant explosives\n"
-                     "Right mouse: aim down sights   R: reload (or change building piece)\n"
-                     "Recoil kicks the same way every time: pull the mouse against it\n"
-                     "Click a gun in your inventory to add attachments\n"
-                     "Code lock in hand + click your door/box to lock it\n"
-                     "1-6 or mouse wheel: hotbar    Tab: inventory & crafting\n"
-                     "E: open doors, boxes, pick plants    R: change building piece\n"
-                     "Hammer: hit your building to upgrade it\n"
-                     "Enter: chat    V: camera    Esc: this menu");
-  ImGui::Spacing();
-  if (wideButton("Leave server")) leaveServer(a);
-  if (wideButton("Quit game")) a.quit = true;
+  if (wideButton("Leave server", 36 * g_scale)) leaveServer(a);
+  if (wideButton("Quit game", 36 * g_scale)) a.quit = true;
   ImGui::End();
+}
+
+// One label + control row in the settings window: label on the left, control filling the rest.
+static void settingRow(const char* label) {
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted(label);
+  ImGui::SameLine(200 * g_scale);
+  ImGui::SetNextItemWidth(-1);
+}
+
+void uiSettings(App& a) {
+  ImGuiIO& io = ImGui::GetIO();
+  const bool inGame = a.screen == Screen::InGame;
+  ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, rgba(0, 0, 0, inGame ? 0.55f : 0.35f));
+  const ImVec2 size(620 * g_scale, 520 * g_scale);
+  ImGui::SetNextWindowPos(io.DisplaySize * 0.5f, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+  ImGui::Begin("Settings", nullptr, kPanel);
+  bool close = !inGame && ImGui::IsKeyPressed(ImGuiKey_Escape);  // in game, Esc is handled with the other menus
+  ImGui::BeginChild("tabs", ImVec2(0, size.y - 110 * g_scale));
+  if (ImGui::BeginTabBar("##settings")) {
+    if (ImGui::BeginTabItem("Game")) {
+      ImGui::Spacing();
+      settingRow("Player name");
+      ImGui::BeginDisabled(inGame);
+      ImGui::InputText("##name", a.playerName, sizeof(a.playerName));
+      ImGui::EndDisabled();
+      if (inGame) ImGui::TextColored(kMuted, "Leave the server to change your name.");
+      settingRow("Mouse sensitivity");
+      ImGui::SliderFloat("##sens", &a.mouseSensitivity, 0.2f, 3.0f, "%.2f");
+      settingRow("Invert mouse Y");
+      ImGui::Checkbox("##invy", &a.invertY);
+      settingRow("Third-person camera");
+      ImGui::Checkbox("##3p", &a.thirdPerson);
+      ImGui::SameLine();
+      ImGui::TextColored(kMuted, "(F5)");
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Video")) {
+      ImGui::Spacing();
+      settingRow("Field of view");
+      ImGui::SliderFloat("##fov", &a.fov, 55.0f, 100.0f, "%.0f deg");
+      settingRow("Fullscreen");
+      if (ImGui::Checkbox("##fs", &a.fullscreen)) applyVideo(a);
+      settingRow("VSync");
+      if (ImGui::Checkbox("##vsync", &a.vsync)) applyVideo(a);
+      ImGui::SameLine();
+      ImGui::TextColored(kMuted, "(off = more fps, may tear)");
+      settingRow("Show fps and ping");
+      ImGui::Checkbox("##fps", &a.showFps);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Audio")) {
+      ImGui::Spacing();
+      settingRow("Master volume");
+      ImGui::SliderFloat("##vol", &a.volume, 0.0f, 1.0f, "%.2f");
+      settingRow("Ambience");
+      ImGui::SliderFloat("##amb", &a.ambienceVolume, 0.0f, 1.0f, "%.2f");
+      ImGui::TextColored(kMuted, "Wind, waves, birds and crickets.");
+      settingRow("Voice chat volume");
+      ImGui::SliderFloat("##vv", &a.voiceVolume, 0.0f, 2.0f, "%.2f");
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Voice")) {
+      a.micTest = a.voiceMode != 0;  // keep the microphone open for the level meter
+      ImGui::Spacing();
+      ImGui::TextColored(kMuted, "Proximity voice: players within %.0f m hear you, louder the closer they are.", kVoiceRange);
+      ImGui::Spacing();
+      settingRow("Voice chat");
+      const char* modes[] = {"Off", "Push to talk (hold V)", "Open mic (voice activated)"};
+      ImGui::Combo("##vmode", &a.voiceMode, modes, 3);
+      ImGui::BeginDisabled(a.voiceMode == 0);
+      settingRow("Microphone boost");
+      ImGui::SliderFloat("##gain", &a.micGain, 0.2f, 4.0f, "%.1fx");
+      ImGui::BeginDisabled(a.voiceMode != 2);
+      settingRow("Open mic sensitivity");
+      ImGui::SliderFloat("##thr", &a.voiceThreshold, 0.005f, 0.3f, "%.3f", ImGuiSliderFlags_Logarithmic);
+      ImGui::EndDisabled();
+      settingRow("Microphone level");
+      {
+        const float lvl = std::clamp(a.mic.level() * a.micGain, 0.0f, 1.0f);
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        const float w = ImGui::GetContentRegionAvail().x, h = 18 * g_scale;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(p, p + ImVec2(w, h), rgba(0.05f, 0.05f, 0.06f, 0.9f), 4 * g_scale);
+        dl->AddRectFilled(p, p + ImVec2(w * lvl, h), lvl > 0.9f ? rgba(0.9f, 0.3f, 0.2f) : rgba(0.35f, 0.8f, 0.4f), 4 * g_scale);
+        if (a.voiceMode == 2) {  // where open mic kicks in (peak is roughly 3x the speaking level)
+          float x = p.x + w * std::clamp(a.voiceThreshold * 3.0f, 0.0f, 1.0f);
+          dl->AddLine(ImVec2(x, p.y - 2), ImVec2(x, p.y + h + 2), rgba(1, 0.8f, 0.3f), 2 * g_scale);
+        }
+        ImGui::Dummy(ImVec2(w, h));
+      }
+      ImGui::EndDisabled();
+      if (a.micFailed) ImGui::TextColored(kBad, "No microphone found. Plug one in, or allow apps to use it in Windows privacy settings.");
+      else if (a.voiceMode != 0) ImGui::TextColored(kMuted, "Speak to test: the bar should move.");
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Controls")) {
+      ImGui::Spacing();
+      const char* rows[][2] = {
+          {"WASD", "Move"}, {"Shift", "Sprint (swim faster in water)"}, {"Space", "Jump"},
+          {"Left mouse", "Hit, gather, shoot, eat, build, plant explosives"}, {"Right mouse", "Aim down sights"},
+          {"R", "Reload / change building piece"}, {"E", "Open doors and boxes, pick plants, search bodies"},
+          {"Tab", "Inventory, clothing and crafting"}, {"1-6 / wheel", "Hotbar"}, {"V (hold)", "Talk (proximity voice)"},
+          {"Enter", "Chat (/help for commands)"}, {"P", "Players and ranks"}, {"F5", "Third-person camera"},
+          {"W / S on a ladder", "Climb up / down"}, {"Esc", "Pause menu"},
+      };
+      if (ImGui::BeginTable("keys", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthFixed, 170 * g_scale);
+        ImGui::TableSetupColumn("Action");
+        for (const auto& r : rows) {
+          ImGui::TableNextRow();
+          ImGui::TableSetColumnIndex(0);
+          ImGui::TextColored(kAccent, "%s", r[0]);
+          ImGui::TableSetColumnIndex(1);
+          ImGui::TextUnformatted(r[1]);
+        }
+        ImGui::EndTable();
+      }
+      ImGui::Spacing();
+      ImGui::TextColored(kMuted, "Tips: recoil kicks the same way every time, so pull the mouse against it.\n"
+                                 "Click a gun in your inventory to add attachments. Code lock in hand + click a door to lock it.");
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+  ImGui::EndChild();
+  ImGui::Separator();
+  ImGui::Spacing();
+  if (wideButton("Done", 40 * g_scale)) close = true;
+  ImGui::End();
+  if (close) {
+    a.settingsOpen = false;
+    saveSettings(a);
+  }
 }
 
 // Keypad for code locks: choose a code (new lock) or type it to get in.
@@ -1087,6 +1303,7 @@ void uiInGame(App& a) {
   }
   hudMessages(a);
   hudInfo(a);
+  hudVoice(a);
   if (dead) deathScreen(a);
   else if (a.inventoryOpen) inventoryScreen(a);
   if (a.chatOpen) chatBox(a);

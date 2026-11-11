@@ -1,5 +1,7 @@
 #include "meshes.h"
 
+#include "character.h"
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -242,6 +244,10 @@ static void handle(MeshBuilder& mb, float length = 0.5f) {
 
 void buildItemModel(Item item, MeshBuilder& mb) {
   using M = Mat4;
+  if (itemDef(item).kind == ItemKind::Armor) {
+    buildArmorDisplay(item, mb);
+    return;
+  }
   switch (item) {
     case Item::Rock:
       mb.blob(M::translate({0, 0.02f, -0.04f}) * M::scale({0.085f, 0.07f, 0.08f}), 3, 0.3f, kStoneCol, kMatRock, 2, 0, 0.05f, 40, 2);
@@ -909,6 +915,59 @@ void buildObject(const WorldObject& o, MeshBuilder& mb) {
       mb.blob(base * M::translate({0, 0.07f, 0.1f}) * M::scale({0.4f, 0.09f, 0.9f}), o.id, 0.05f, Vec3{0.42f, 0.06f, 0.04f} * wear, kMatCloth, 2);
       mb.blob(base * M::translate({0, 0.1f, -0.82f}) * M::scale({0.3f, 0.08f, 0.16f}), o.id + 1, 0.05f, Vec3{0.55f, 0.50f, 0.40f}, kMatCloth, 2);
       break;
+    case ObjType::BodyBag: {  // zipped black body bag lying where they fell
+      const M bb = M::translate(o.pos) * M::rotateY(static_cast<float>(o.rot) * kPi * 0.5f);
+      const Vec3 plastic{0.035f, 0.035f, 0.04f};
+      mb.blob(bb * M::translate({0, 0.13f, 0.1f}) * M::scale({0.28f, 0.13f, 0.72f}), o.id, 0.08f, plastic, kMatCloth, 2, 0, 0.02f, 50);
+      mb.blob(bb * M::translate({0, 0.12f, -0.72f}) * M::scale({0.15f, 0.12f, 0.17f}), o.id + 7, 0.06f, plastic, kMatCloth, 2, 0, 0.02f, 50);  // head
+      for (float s : {-1.0f, 1.0f})  // feet
+        mb.blob(bb * M::translate({s * 0.1f, 0.15f, 0.86f}) * M::scale({0.08f, 0.1f, 0.08f}), o.id + 9, 0.05f, plastic, kMatCloth, 1, 0, 0.02f, 50);
+      mb.box(bb * M::translate({0.0f, 0.262f, 0.0f}) * M::scale({0.012f, 0.008f, 1.5f}), {0.25f, 0.25f, 0.27f}, kMatMetal);  // zipper
+      mb.box(bb * M::translate({0.05f, 0.26f, -0.62f}) * M::rotateY(0.3f) * M::scale({0.06f, 0.004f, 0.09f}), {0.75f, 0.72f, 0.6f}, kMatPlain);  // tag
+      break;
+    }
+    case ObjType::RigLeg: {  // tall steel column down into the sea, with banding and a base plate under the deck
+      const Vec3 rigYellow{0.42f, 0.32f, 0.06f};
+      mb.cylinder(M::translate(o.pos - Vec3{0, 70.0f, 0}) * M::scale({0.7f, 70.0f, 0.7f}), 16, 1, 1, rigYellow * 0.8f, kMatMetal);
+      for (int k = 1; k < 12; ++k)
+        mb.cylinder(M::translate(o.pos - Vec3{0, 6.0f * static_cast<float>(k), 0}) * M::scale({0.76f, 0.25f, 0.76f}), 16, 1, 1, kSteel, kMatMetal);
+      mb.box(M::translate(o.pos - Vec3{0, 0.15f, 0}) * M::scale({1.8f, 0.3f, 1.8f}), kSteel * 0.8f, kMatMetal);
+      break;
+    }
+    case ObjType::Ladder: {
+      Vec3 along = o.rot % 2 == 0 ? Vec3{1, 0, 0} : Vec3{0, 0, 1};
+      const Vec3 rail{0.32f, 0.30f, 0.26f};
+      for (float s : {-1.0f, 1.0f})
+        mb.box(M::translate(o.pos + along * (s * 0.3f) + Vec3{0, -7.4f, 0}) * M::scale({0.05f, 17.2f, 0.05f}), rail, kMatMetal);
+      for (float y = -16.0f; y < 1.0f; y += 0.32f)
+        mb.box(M::translate(o.pos + Vec3{0, y, 0}) * M::scale(along * 0.6f + (o.rot % 2 == 0 ? Vec3{0, 0.035f, 0.035f} : Vec3{0.035f, 0.035f, 0})),
+               rail * 0.9f, kMatMetal);
+      break;
+    }
+    case ObjType::Crate: {  // olive military crate: planked box, steel corners, stencil band, rope handles
+      const M cb = M::translate(o.pos) * M::rotateY(static_cast<float>(o.rot) * kPi * 0.5f);
+      const Vec3 olive{0.10f, 0.13f, 0.06f};
+      mb.box(cb * M::translate({0, 0.33f, 0}) * M::scale({1.2f, 0.62f, 0.8f}), olive, kMatWood);
+      mb.box(cb * M::translate({0, 0.67f, 0}) * M::scale({1.24f, 0.08f, 0.84f}), olive * 0.85f, kMatWood);  // lid
+      for (float sx : {-1.0f, 1.0f})
+        for (float sz : {-1.0f, 1.0f})
+          mb.box(cb * M::translate({sx * 0.58f, 0.36f, sz * 0.38f}) * M::scale({0.08f, 0.72f, 0.08f}), kSteel, kMatMetal);
+      mb.box(cb * M::translate({0, 0.42f, -0.405f}) * M::scale({0.5f, 0.12f, 0.01f}), {0.55f, 0.50f, 0.32f}, kMatPlain);  // stencil
+      for (float sx : {-1.0f, 1.0f})
+        mb.box(cb * M::translate({sx * 0.62f, 0.45f, 0}) * M::scale({0.03f, 0.05f, 0.25f}), kLash, kMatCloth);
+      break;
+    }
+    case ObjType::Railing: {
+      Vec3 along = o.rot % 2 == 0 ? Vec3{1, 0, 0} : Vec3{0, 0, 1};
+      Vec3 thin = o.rot % 2 == 0 ? Vec3{0, 0, 0.06f} : Vec3{0.06f, 0, 0};
+      const Vec3 yellow{0.50f, 0.38f, 0.05f};
+      for (float a : {-1.45f, 0.0f, 1.45f})
+        mb.box(M::translate(o.pos + along * a + Vec3{0, 0.55f, 0}) * M::scale(Vec3{0.06f, 1.1f, 0.06f}), yellow, kMatMetal);
+      for (float h : {0.55f, 1.08f})
+        mb.box(M::translate(o.pos + Vec3{0, h, 0}) * M::scale(along * 3.0f + thin + Vec3{0, 0.06f, 0}), yellow, kMatMetal);
+      mb.box(M::translate(o.pos + Vec3{0, 0.06f, 0}) * M::scale(along * 3.0f + thin * 0.5f + Vec3{0, 0.12f, 0}), yellow * 0.7f, kMatMetal);  // toe board
+      break;
+    }
     case ObjType::LootBag:
       mb.blob(M::translate(o.pos + Vec3{0, 0.22f, 0}) * M::scale({0.3f, 0.25f, 0.28f}), o.id, 0.2f, Vec3{0.20f, 0.14f, 0.07f}, kMatCloth, 2);
       mb.cylinder(M::translate(o.pos + Vec3{0, 0.42f, 0}) * M::scale({0.08f, 0.12f, 0.08f}), 10, 1, 1.4f, Vec3{0.18f, 0.12f, 0.06f}, kMatCloth);

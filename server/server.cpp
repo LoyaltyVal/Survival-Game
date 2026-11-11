@@ -22,6 +22,18 @@ constexpr size_t kMaxCraftQueue = 10;
 constexpr size_t kMaxUnacked = 20000;       // client stopped acking: drop it
 constexpr int kObjectsPerMessage = 30;
 constexpr double kInterpDelay = 0.1;        // matches NetClient::kInterpDelay
+
+// Damage by body zone (Head, Chest, Legs, Feet), before armour.
+constexpr float kGunZoneScale[kArmorSlots] = {2.0f, 1.0f, 0.75f, 0.6f};
+constexpr float kMeleeZoneScale[kArmorSlots] = {1.5f, 1.0f, 0.8f, 0.6f};
+
+// Which body zone a hit landed on: the head box, or by height on the body box (0 = feet, 1.45 = neck).
+static ArmorSlot hitZone(bool head, float relY) {
+  if (head) return ArmorSlot::Head;
+  if (relY >= 0.82f) return ArmorSlot::Chest;
+  if (relY >= 0.14f) return ArmorSlot::Legs;
+  return ArmorSlot::Feet;
+}
 constexpr uint32_t kSaveMagic = 0x31574753;  // "SGW1"
 constexpr uint32_t kSaveVersion = 4;  // 4: + magazines/attachments, locks, claims
 //  // 3: + ranks, bans, mutes, time of day
@@ -35,6 +47,7 @@ bool Server::start() {
     return false;
   }
   if (!cfg_.savePath.empty()) load();
+  spawnOilRigs();
   std::printf("[server] \"%s\" listening on UDP %u, %d Hz tick, max %d players, seed %u\n", cfg_.name.c_str(),
               cfg_.port, cfg_.tickRate, cfg_.maxPlayers, cfg_.terrainSeed);
   return true;
@@ -121,6 +134,8 @@ void Server::receivePackets() {
 
     if (*type == PacketType::Input) {
       handleInput(c, buf, size);
+    } else if (*type == PacketType::Voice) {
+      handleVoice(c, buf, size);
     } else if (*type == PacketType::Reliable) {
       std::vector<std::vector<uint8_t>> msgs;
       if (c.reliable.receive(buf, size, msgs))
@@ -128,6 +143,24 @@ void Server::receivePackets() {
     } else if (*type == PacketType::Disconnect) {
       removeClient(it, "left");
     }
+  }
+}
+
+void Server::handleVoice(Client& c, const uint8_t* data, size_t size) {
+  if (time_ - c.voiceWindow >= 1.0) {
+    c.voiceWindow = time_;
+    c.voiceCount = 0;
+  }
+  if (++c.voiceCount > 30) return;  // 25 frames a second is real speech; more is a flood
+  if (c.vitals.dead || isMuted(c.name)) return;
+  VoicePacket p;
+  if (!decode(data, size, p)) return;
+  p.speaker = c.id;
+  const auto bytes = encode(p);
+  const Vec3 mouth = c.state.pos + Vec3{0, kEyeHeight, 0};
+  for (const auto& [addr, o] : clients_) {
+    if (o.id == c.id) continue;
+    if (length(o.state.pos + Vec3{0, kEyeHeight, 0} - mouth) <= kVoiceRange) send(addr, bytes);
   }
 }
 
@@ -196,7 +229,17 @@ void Server::handleHello(const Address& from, const uint8_t* data, size_t size) 
     c.state = rec->second.state;
     c.vitals = rec->second.vitals;
     c.inv = rec->second.inv;
-    c.inv.resize(kInventorySlots);
+    c.inv.resize(kPlayerSlots);  // saves from before clothing slots have 36
+    for (int i = kWearFirst; i < kPlayerSlots; ++i) {  // never trust what a save put in a clothing slot
+      ItemStack& st = c.inv[static_cast<size_t>(i)];
+      if (st.empty() || slotAccepts(c.inv, i, st.item)) continue;
+      for (int j = 0; j < kInventorySlots; ++j)
+        if (c.inv[static_cast<size_t>(j)].empty()) {
+          c.inv[static_cast<size_t>(j)] = st;
+          break;
+        }
+      st = {};
+    }
     c.crafting = rec->second.crafting;
     returning = true;
   } else {
@@ -294,6 +337,7 @@ void Server::sendSnapshots() {
       e.pitch = o->state.pitch;
       e.held = o->inv[o->slot].empty() ? Item::None : o->inv[o->slot].item;
       e.flags = static_cast<uint8_t>((o->vitals.dead ? kEntityDead : 0) | (time_ - o->lastAttack < 0.15 ? kEntityAttacking : 0));
+      for (int k = 0; k < kArmorSlots; ++k) e.wear[static_cast<size_t>(k)] = wornAt(o->inv, static_cast<ArmorSlot>(k));
       snap.others.push_back(e);
     }
     send(addr, encode(snap));
@@ -437,7 +481,7 @@ void Server::containerChanged(uint32_t objectId) {
   auto it = containers_.find(objectId);
   const WorldObject* o = world_.find(objectId);
   if (it == containers_.end() || !o) return;
-  if (o->type == ObjType::LootBag && slotsEmpty(it->second)) {  // looted clean: the bag disappears
+  if (isLootPile(o->type) && slotsEmpty(it->second)) {  // looted clean: the bag disappears
     containers_.erase(it);
     bagExpiry_.erase(objectId);
     world_.remove(objectId);
@@ -468,7 +512,13 @@ void Server::handleMessage(Client& c, const std::vector<uint8_t>& msg) {
       Slots* a = containerFor(c, from);
       Slots* b = containerFor(c, to);
       if (!a || !b) return;
+      // Putting clothes on or taking them off makes a rustle everyone nearby hears.
+      const bool armorQuickMove = from == kSelfContainer && to == from && toSlot == kAutoSlot && static_cast<size_t>(fromSlot) < a->size() &&
+                                  !(*a)[fromSlot].empty() && itemDef((*a)[fromSlot].item).kind == ItemKind::Armor;
+      const bool dressing = armorQuickMove || (from == kSelfContainer && isWearSlot(*a, fromSlot)) ||
+                            (to == kSelfContainer && isWearSlot(*b, toSlot));
       if (moveItem(*a, fromSlot, *b, toSlot, count)) {
+        if (dressing) soundAt(c.state.pos + Vec3{0, 1.0f, 0}, Sound::Equip, 12.0f, 0);
         if (from == kSelfContainer || to == kSelfContainer) c.invDirty = true;
         if (from != kSelfContainer) containerChanged(from);
         if (to != kSelfContainer && to != from) containerChanged(to);
@@ -620,8 +670,18 @@ void Server::processInput(Client& c, const PlayerInput& raw) {
   c.slot = in.slot;
   if (c.vitals.dead) return;
   c.state.starving = c.vitals.food <= 0;
+  const float fallSpeed = -c.state.vel.y;
+  const bool wasAirborne = !c.state.onGround;
   applyInput(c.state, in, terrain_, &world_);
   c.inputClock += kInputDt;
+  // Fall damage: a 4 m drop is fine, 10 m hurts badly, 15 m+ kills. Water breaks the fall.
+  if (wasAirborne && c.state.onGround && fallSpeed > 11.0f) {
+    float dmg = (fallSpeed - 11.0f) * 9.0f;
+    soundAt(c.state.pos, Sound::HitFlesh, 25.0f, 0);
+    damagePlayer(c, absorb(c, ArmorSlot::Feet, dmg * 0.4f, true) + absorb(c, ArmorSlot::Legs, dmg * 0.6f, true), nullptr,
+                 "Fell to their death", false);
+    if (c.vitals.dead) return;
+  }
   c.sprinting = (in.buttons & kButtonSprint) && in.moveZ > 0 && !c.state.exhausted;
   c.aiming = (in.buttons & kButtonAim) != 0;
   if (c.reloading) {
@@ -700,6 +760,14 @@ void Server::primaryAction(Client& c, const PlayerInput& in, bool pressed) {
       c.nextUse = c.inputClock + d.useTime;
       c.lastAttack = time_;
       break;
+    case ItemKind::Armor: {  // clicking with clothing in hand puts it on (swapping what was worn)
+      if (!pressed) return;
+      std::swap(held, c.inv[static_cast<size_t>(wearSlot(d.armorSlot))]);
+      c.invDirty = true;
+      c.nextUse = c.inputClock + d.useTime;
+      soundAt(c.state.pos + Vec3{0, 1.0f, 0}, Sound::Equip, 12.0f, 0);
+      break;
+    }
     case ItemKind::Tool:
       meleeHit(c, in, item);
       c.nextUse = c.inputClock + d.useTime;
@@ -741,6 +809,7 @@ void Server::meleeHit(Client& c, const PlayerInput& in, Item item) {
   enum class Kind { None, Player, Object, Node } kind = Kind::None;
   uint32_t hitId = 0;
   bool head = false;
+  float relY = 1.0f;
 
   const double rewindTo = time_ - std::clamp(c.rtt * 0.5 + kInterpDelay, 0.0, 0.25);
   for (auto& [addr, o] : clients_) {
@@ -750,11 +819,13 @@ void Server::meleeHit(Client& c, const PlayerInput& in, Item item) {
     AABB hd{{p.x - 0.2f, p.y + 1.45f, p.z - 0.2f}, {p.x + 0.2f, p.y + 1.85f, p.z + 0.2f}};
     float t;
     if (rayAABB(eye, dir, hd, best, t)) { best = t; kind = Kind::Player; hitId = o.id; head = true; }
-    if (rayAABB(eye, dir, body, best, t)) { best = t; kind = Kind::Player; hitId = o.id; head = false; }
+    if (rayAABB(eye, dir, body, best, t)) {
+      best = t; kind = Kind::Player; hitId = o.id; head = false; relY = eye.y + dir.y * t - p.y;
+    }
   }
   if (auto h = world_.raycast(eye, dir, best, true)) {
     const WorldObject* o = world_.find(h->objectId);
-    if (o && o->type != ObjType::LootBag) { best = h->dist; kind = Kind::Object; hitId = h->objectId; }
+    if (o && !isLootPile(o->type)) { best = h->dist; kind = Kind::Object; hitId = h->objectId; }
   }
   std::vector<ResourceNode> nodes;
   nodesInRect(terrain_, eye.x - best, eye.z - best, eye.x + best, eye.z + best, nodes);
@@ -772,8 +843,11 @@ void Server::meleeHit(Client& c, const PlayerInput& in, Item item) {
   switch (kind) {
     case Kind::Player:
       if (Client* target = findClient(hitId)) {
-        soundAt(target->state.pos + Vec3{0, 1.2f, 0}, Sound::HitFlesh, 30.0f, c.id);
-        damagePlayer(*target, d.damage * (head ? 1.5f : 1.0f), &c, d.name, head);
+        ArmorSlot zone = hitZone(head, relY);
+        bool armored = false;
+        float dmg = absorb(*target, zone, d.damage * kMeleeZoneScale[static_cast<int>(zone)], true, &armored);
+        soundAt(target->state.pos + Vec3{0, 1.2f, 0}, armored ? Sound::HitArmor : Sound::HitFlesh, 30.0f, c.id);
+        damagePlayer(*target, dmg, &c, d.name, head, armored);
       }
       break;
     case Kind::Object: {
@@ -861,7 +935,7 @@ Server::ShotHit Server::traceShot(const Client& c, const Vec3& eye, const Vec3& 
     AABB hd{{p.x - 0.2f, p.y + 1.45f, p.z - 0.2f}, {p.x + 0.2f, p.y + 1.85f, p.z + 0.2f}};
     float t;
     if (rayAABB(eye, dir, hd, best, t)) { best = t; hit.playerId = o.id; hit.head = true; }
-    if (rayAABB(eye, dir, body, best, t)) { best = t; hit.playerId = o.id; hit.head = false; }
+    if (rayAABB(eye, dir, body, best, t)) { best = t; hit.playerId = o.id; hit.head = false; hit.relY = eye.y + dir.y * t - p.y; }
   }
   if (auto h = world_.raycast(eye, dir, best, false)) {  // walls stop bullets
     best = h->dist;
@@ -875,8 +949,47 @@ Server::ShotHit Server::traceShot(const Client& c, const Vec3& eye, const Vec3& 
       hit.objectId = 0;
     }
   }
+  // Tree trunks, rocks and ore stop bullets too (checked last, over the now-shortened ray).
+  const Vec3 end = eye + dir * best;
+  std::vector<ResourceNode> nodes;
+  nodesInRect(terrain_, std::min(eye.x, end.x) - 2, std::min(eye.z, end.z) - 2, std::max(eye.x, end.x) + 2,
+              std::max(eye.z, end.z) + 2, nodes);
+  for (const auto& n : nodes) {
+    if (nodeInfo(n.type).pickup) continue;
+    auto rt = nodes_.find(n.id);
+    if (rt != nodes_.end() && rt->second.respawnAt > 0) continue;  // chopped down / mined out
+    float t;
+    if (rayAABB(eye, dir, nodeBounds(n), best, t)) {
+      best = t;
+      hit.playerId = 0;
+      hit.objectId = 0;
+      hit.node = true;
+    }
+  }
   hit.dist = best;
   return hit;
+}
+
+bool Server::clearLine(const Vec3& from, const Vec3& b) const {
+  Vec3 d = b - from;
+  float len = length(d);
+  if (len < 0.4f) return true;
+  d = d / len;
+  // Start a little way out: an explosive sits right on (or just inside) the surface it is stuck to.
+  const Vec3 a = from + d * 0.35f;
+  len -= 0.35f;
+  if (world_.raycast(a, d, len, false)) return false;
+  if (auto t = rayTerrain(terrain_, a, d, len); t && *t < len) return false;
+  std::vector<ResourceNode> nodes;
+  nodesInRect(terrain_, std::min(a.x, b.x) - 2, std::min(a.z, b.z) - 2, std::max(a.x, b.x) + 2, std::max(a.z, b.z) + 2, nodes);
+  for (const auto& n : nodes) {
+    if (nodeInfo(n.type).pickup) continue;
+    auto rt = nodes_.find(n.id);
+    if (rt != nodes_.end() && rt->second.respawnAt > 0) continue;
+    float t;
+    if (rayAABB(a, d, nodeBounds(n), len, t)) return false;
+  }
+  return true;
 }
 
 void Server::shoot(Client& c, const PlayerInput& in, ItemStack& gun) {
@@ -894,7 +1007,11 @@ void Server::shoot(Client& c, const PlayerInput& in, ItemStack& gun) {
   std::uniform_real_distribution<float> u(0.0f, 1.0f);
 
   const double rewindTo = time_ - std::clamp(c.rtt * 0.5 + kInterpDelay, 0.0, 0.25);
-  std::unordered_map<uint32_t, std::pair<float, bool>> playerDamage;  // pellets add up per target
+  struct Acc {
+    float damage = 0;
+    bool head = false, armor = false;
+  };
+  std::unordered_map<uint32_t, Acc> playerDamage;  // pellets add up per target
   for (int p = 0; p < d.pellets; ++p) {
     float r = spread * std::sqrt(u(rng_)), theta = 2 * kPi * u(rng_);
     Vec3 dir = normalize(aim + right * (r * std::cos(theta)) + up * (r * std::sin(theta)));
@@ -903,27 +1020,56 @@ void Server::shoot(Client& c, const PlayerInput& in, ItemStack& gun) {
     float falloff = 1.0f - 0.5f * clampf((hit.dist - st.range * 0.5f) / (st.range * 0.5f), 0.0f, 1.0f);
     float dmg = st.damage * falloff;
     if (hit.playerId) {
-      auto& acc = playerDamage[hit.playerId];
-      acc.first += dmg * (hit.head ? 2.0f : 1.0f);
-      acc.second = acc.second || hit.head;
+      Acc& acc = playerDamage[hit.playerId];
+      ArmorSlot zone = hitZone(hit.head, hit.relY);
+      if (Client* target = findClient(hit.playerId))
+        acc.damage += absorb(*target, zone, dmg * kGunZoneScale[static_cast<int>(zone)], false, &acc.armor);
+      acc.head = acc.head || hit.head;
+    } else if (hit.node) {
+      if (p == 0) soundAt(eye + dir * hit.dist, Sound::HitWood, 35.0f, 0);
     } else if (hit.objectId) {
       const WorldObject* o = world_.find(hit.objectId);
       if (o) damageObject(hit.objectId, isBuildingPiece(o->type) && o->tier != Tier::Twig ? dmg * 0.1f : dmg);
     }
   }
   for (const auto& [id, acc] : playerDamage)
-    if (Client* target = findClient(id)) damagePlayer(*target, acc.first, &c, d.name, acc.second);
+    if (Client* target = findClient(id)) damagePlayer(*target, acc.damage, &c, d.name, acc.head, acc.armor);
   soundAt(eye, st.silenced ? Sound::Silenced : d.sound, st.silenced ? 70.0f : 400.0f, c.id);
 }
 
-void Server::damagePlayer(Client& victim, float amount, Client* attacker, const char* weapon, bool headshot) {
+float Server::absorb(Client& v, ArmorSlot zone, float amount, bool melee, bool* hitArmor) {
+  if (v.vitals.dead || v.god || amount <= 0) return amount;
+  ItemStack& st = v.inv[static_cast<size_t>(wearSlot(zone))];
+  if (st.empty()) return amount;
+  const ItemDef& d = itemDef(st.item);
+  if (d.kind != ItemKind::Armor) return amount;
+  const float soaked = amount * (melee ? d.armorMelee : d.armorBullet);
+  if (hitArmor && d.armorBullet >= 0.3f) *hitArmor = true;  // metal: the shooter hears it ping
+  const int wear = std::max(1, static_cast<int>(std::lround(soaked)));
+  st.data = static_cast<uint16_t>(std::min(65535, st.data + wear));
+  if (st.data >= d.durability) {
+    sendText(v, TextKind::Warning, std::string("Your ") + d.name + " broke!");
+    st = {};
+  }
+  v.invDirty = true;
+  return amount - soaked;
+}
+
+float Server::absorbBlast(Client& v, float amount) {
+  static const float share[kArmorSlots] = {0.15f, 0.45f, 0.30f, 0.10f};  // how much of a blast each body part takes
+  float through = 0;
+  for (int k = 0; k < kArmorSlots; ++k) through += absorb(v, static_cast<ArmorSlot>(k), amount * share[k], false);
+  return through;
+}
+
+void Server::damagePlayer(Client& victim, float amount, Client* attacker, const char* weapon, bool headshot, bool armored) {
   if (victim.vitals.dead || victim.god) return;
   victim.vitals.health -= amount;
   bool killed = victim.vitals.health <= 0;
   if (attacker) {
     ByteWriter w;
     w.u8(static_cast<uint8_t>(Msg::HitConfirm));
-    w.u8(static_cast<uint8_t>((headshot ? 1 : 0) | (killed ? 2 : 0)));
+    w.u8(static_cast<uint8_t>((headshot ? 1 : 0) | (killed ? 2 : 0) | (armored ? 4 : 0)));
     queue(*attacker, w);
   }
   if (killed) {
@@ -945,8 +1091,10 @@ void Server::killPlayer(Client& victim, const std::string& cause, const std::str
       if (in.item != Item::None) addItem(victim.inv, in.item, in.count);
   victim.crafting.clear();
   victim.craftDirty = true;
-  if (!slotsEmpty(victim.inv)) spawnLootBag(victim.state.pos, victim.inv);
-  victim.inv.assign(kInventorySlots, {});
+  if (!slotsEmpty(victim.inv))
+    spawnLootBag(victim.state.pos, victim.inv, ObjType::BodyBag, victim.id,
+                 static_cast<uint8_t>(static_cast<int>(std::lround(victim.state.yaw / (kPi * 0.5f))) & 3));
+  victim.inv.assign(kPlayerSlots, {});
   victim.invDirty = true;
   victim.state.vel = {};
   victim.pending.clear();
@@ -986,7 +1134,7 @@ void Server::respawnPlayer(Client& c, bool atBag) {
 
 void Server::damageObject(uint32_t id, float amount) {
   const WorldObject* p = world_.find(id);
-  if (!p || p->type == ObjType::LootBag) return;
+  if (!p || isLootPile(p->type) || (p->flags & kMonument)) return;
   WorldObject o = *p;
   o.hp -= amount;
   if (o.hp > 0) {
@@ -1065,15 +1213,17 @@ void Server::give(Client& c, Item item, int count) {
   warn(c, "Inventory full - dropped on the ground");
 }
 
-uint32_t Server::spawnLootBag(const Vec3& pos, const Slots& items) {
-  Slots slots(kInventorySlots);
+uint32_t Server::spawnLootBag(const Vec3& pos, const Slots& items, ObjType type, uint32_t owner, uint8_t rot) {
+  Slots slots(kLootBagSlots);
   int k = 0;
   for (const auto& s : items)
-    if (!s.empty() && k < kInventorySlots) slots[k++] = s;
+    if (!s.empty() && k < kLootBagSlots) slots[k++] = s;
   if (k == 0) return 0;
   WorldObject o;
   o.id = nextObjectId_++;
-  o.type = ObjType::LootBag;
+  o.type = type;
+  o.owner = owner;
+  o.rot = rot;
   o.hp = 1;
   float x = clampf(pos.x, 2.0f, kWorldSize - 2.0f), z = clampf(pos.z, 2.0f, kWorldSize - 2.0f);
   o.pos = {x, world_.groundHeight(terrain_, x, z, 0.1f, pos.y + 0.5f, 0.0f), z};
@@ -1151,6 +1301,10 @@ void Server::doPlace(Client& c, ObjType type, const Vec3& pos, uint8_t rot, Item
       return;
     }
   } else {
+    if (nearMonument(pos)) {
+      warn(c, "You can't build at a monument");
+      return;
+    }
     if (buildBlocked(c, pos)) {
       warn(c, "Building blocked: someone else's land claim");
       return;
@@ -1343,7 +1497,7 @@ void Server::explode(uint32_t chargeId) {
   std::vector<std::pair<uint32_t, float>> hits;
   std::vector<ObjBox> boxes;
   for (const WorldObject* o : nearby) {
-    if (o->type == ObjType::LootBag || o->type == ObjType::Charge) continue;
+    if (isLootPile(o->type) || o->type == ObjType::Charge || (o->flags & kMonument)) continue;
     boxes.clear();
     objectBoxes(*o, boxes);
     float best = 1e9f;
@@ -1359,8 +1513,11 @@ void Server::explode(uint32_t chargeId) {
   Client* owner = findClient(fuse.owner);
   for (auto& [addr, o] : clients_) {
     float dist = length(o.state.pos + Vec3{0, 0.9f, 0} - at);
-    if (dist < playerRadius) damagePlayer(o, (fuse.item == Item::ExplosiveCharge ? 90.0f : 55.0f) * (1.0f - dist / playerRadius),
-                                          owner && owner != &o ? owner : nullptr, d.name, false);
+    if (dist < playerRadius && !clearLine(at, o.state.pos + Vec3{0, 1.6f, 0}) && !clearLine(at, o.state.pos + Vec3{0, 0.5f, 0}))
+      continue;  // fully behind a wall or rock
+    if (dist < playerRadius)
+      damagePlayer(o, absorbBlast(o, (fuse.item == Item::ExplosiveCharge ? 90.0f : 55.0f) * (1.0f - dist / playerRadius)),
+                   owner && owner != &o ? owner : nullptr, d.name, false);
   }
   soundAt(at, Sound::Explosion, 500.0f, 0);
 }
@@ -1388,6 +1545,8 @@ void Server::doInteract(Client& c, uint8_t kind, uint32_t id) {
       case ObjType::LargeBox:
       case ObjType::Stash:
       case ObjType::LootBag:
+      case ObjType::BodyBag:
+      case ObjType::Crate:
         c.openContainer = id;
         sendContainer(c);
         break;
@@ -1449,6 +1608,7 @@ void Server::updateWorld() {
       ++it;
     }
   }
+  updateCrates();
   std::vector<uint32_t> expired;
   for (const auto& [id, t] : bagExpiry_)
     if (time_ >= t) expired.push_back(id);
@@ -1744,7 +1904,7 @@ bool Server::load() {
     if (o.type == ObjType::Charge) charges.push_back(id);
   for (uint32_t id : charges) world_.remove(id);
   for (const auto& [id, o] : world_.objects())
-    if (o.type == ObjType::LootBag) bagExpiry_[id] = bagTimes.count(id) ? bagTimes[id] : time_ + kLootBagLifetime;
+    if (isLootPile(o.type)) bagExpiry_[id] = bagTimes.count(id) ? bagTimes[id] : time_ + kLootBagLifetime;
   std::printf("[server] loaded %zu objects and %zu players from %s\n", world_.objects().size(), records_.size(),
               cfg_.savePath.c_str());
   return true;

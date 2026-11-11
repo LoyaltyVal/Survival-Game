@@ -191,6 +191,11 @@ const char* objName(ObjType t) {
     case ObjType::Stash: return "Small Stash";
     case ObjType::LandClaim: return "Land Claim Post";
     case ObjType::Charge: return "Explosive";
+    case ObjType::BodyBag: return "Body Bag";
+    case ObjType::RigLeg: return "Support";
+    case ObjType::Ladder: return "Ladder";
+    case ObjType::Crate: return "Military Crate";
+    case ObjType::Railing: return "Railing";
     default: return "?";
   }
 }
@@ -276,7 +281,8 @@ bool isLockable(ObjType t) {
 
 int containerSize(ObjType t) {
   if (t == ObjType::StorageBox) return 18;
-  if (t == ObjType::LootBag) return kInventorySlots;
+  if (t == ObjType::LootBag || t == ObjType::BodyBag) return kLootBagSlots;
+  if (t == ObjType::Crate) return 12;
   if (t == ObjType::LargeBox) return 36;
   if (t == ObjType::Stash) return 6;
   return 0;
@@ -371,6 +377,27 @@ void objectBoxes(const WorldObject& o, std::vector<ObjBox>& out, bool visual) {
       break;
     case ObjType::LargeBox:
       out.push_back({centeredBox(p, 0.8f, 0.4f, 0.35f, o.rot), true});
+      break;
+    case ObjType::BodyBag:
+      out.push_back({centeredBox(p, 0.3f, 0.15f, 0.95f, o.rot), false});
+      break;
+    case ObjType::RigLeg:
+      out.push_back({{{p.x - 0.7f, p.y - 70.0f, p.z - 0.7f}, {p.x + 0.7f, p.y, p.z + 0.7f}}, true});
+      break;
+    case ObjType::Ladder: {
+      // Climbing zone up to just above the deck, and a solid plate on the deck side to climb against.
+      out.push_back({centeredBox({p.x, p.y - 16.0f, p.z}, 0.45f, 8.15f, 0.35f, o.rot), false});
+      Vec3 toDeck = rotDir(o.rot) * -1.0f;
+      out.push_back({centeredBox(Vec3{p.x, p.y - 16.0f, p.z} + toDeck * 0.42f, toDeck.x != 0 ? 0.05f : 0.45f, 7.87f,
+                                 toDeck.z != 0 ? 0.05f : 0.45f, 0),
+                     true});
+      break;
+    }
+    case ObjType::Crate:
+      out.push_back({centeredBox(p, 0.6f, 0.35f, 0.4f, o.rot), true});
+      break;
+    case ObjType::Railing:
+      out.push_back({edgeBox(o, -h, h, 0, 1.1f, 0.05f), true});
       break;
     case ObjType::Stash:
       out.push_back({centeredBox(p, 0.25f, 0.06f, 0.25f, o.rot), false});
@@ -484,6 +511,23 @@ bool World::blocked(const AABB& box) const {
     for (int idx : it->second) {
       const Entry& e = entries_[idx];
       if (e.solid && overlaps(e.box, box)) return true;
+    }
+  }
+  return false;
+}
+
+bool World::onLadder(const AABB& box) const {
+  rebuild();
+  std::vector<int64_t> keys;
+  cellsFor(box, keys);
+  for (auto k : keys) {
+    auto it = grid_.find(k);
+    if (it == grid_.end()) continue;
+    for (int idx : it->second) {
+      const Entry& e = entries_[idx];
+      if (e.solid || !overlaps(e.box, box)) continue;
+      auto o = objects_.find(e.id);
+      if (o != objects_.end() && o->second.type == ObjType::Ladder) return true;
     }
   }
   return false;

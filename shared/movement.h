@@ -23,6 +23,10 @@ constexpr float kMaxPitch = 1.55f;     // just under 90 degrees
 constexpr float kPlayerRadius = 0.35f;
 constexpr float kPlayerHeight = 1.8f;
 constexpr float kStepUp = 0.45f;       // ledges this high are walked onto
+constexpr float kSwimSpeed = 2.6f;     // m/s (sprint-swimming 3.6, costs stamina)
+constexpr float kSwimFastSpeed = 3.6f;
+constexpr float kSwimFeetY = kSeaLevel - 1.3f;  // where your feet float: head and shoulders out of the water
+constexpr float kClimbSpeed = 3.0f;    // up/down ladders
 
 // Stamina: sprinting and jumping cost it; it comes back after a short rest.
 constexpr float kMaxStamina = 100.0f;
@@ -62,6 +66,9 @@ struct PlayerState {
   bool exhausted = false;  // ran out; must recover before sprinting again
   bool starving = false;   // set by the server from hunger; slows stamina regen
 };
+
+// In water too deep to stand in (feet floating). Uses the terrain/objects under the player.
+bool isSwimming(const PlayerState& s, const Terrain& terrain, const World* world);
 
 // Clamps anything a hacked client could abuse (NaN, move vector > 1, pitch).
 PlayerInput sanitizeInput(const PlayerInput& in);
